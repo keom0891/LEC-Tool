@@ -6,7 +6,7 @@ Shared helper utilities used across all modules.
 
 Functions
 ---------
-aggregate_event_values_by_year  Sum event-level values into annual buckets.
+aggregate_event_values_by_year   Sum event-level values into annual buckets.
 compute_aal                      Average Annual Loss from a LEC curve.
 """
 

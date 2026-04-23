@@ -61,7 +61,7 @@ def build_inv_cdf(lambda_loss, LS):
     Notes
     -----
     The CDF is defined as F(L) = 1 − λ(L) / λ_min, where λ_min is
-    max(lambda_loss).  A small epsilon jitter is added to enforce strict
+    max(lambda_loss). A small epsilon jitter is added to enforce strict
     monotonicity before interpolation.
     """
     lam = np.asarray(lambda_loss, float)

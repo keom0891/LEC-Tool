@@ -4,7 +4,7 @@ main.py — LEC Tool Demo Script
 ================================
 Complete end-to-end demonstration of the LEC Tool workflow.
 
-This script is the integration reference for Greencode.  It reads input
+This script is the integration reference for Greencode. It reads input
 data from the data/ folder, defines all parameters, calls the four core
 modules in order, and produces all diagnostic plots.
 
@@ -27,10 +27,12 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 from pathlib import Path
+from datetime import datetime
 
 from lec_core import compute_empirical_lec, build_hybrid_lec
+from utils import compute_aal
 from simulation import generate_synthetic_catalogue
-from drm import apply_strategy
+from risk_management import apply_strategy
 from risk_reduction import compute_expost_reduction, generate_reduced_catalogue
 
 # =============================================================================
@@ -49,19 +51,17 @@ curva_hibrida     = True   # blend empirical LEC with probabilistic tail
 tail_loss = np.array([1000, 1500, 2000, 2500, 3000, 3500,
                       4000, 4500, 5000, 5500, 6000, 6500,
                       7000, 7500, 8000], dtype=float)
-tail_aep  = np.array([0.033879357, 0.023929191, 0.023929191,
-                      0.01993718,  0.01993718,  0.017939179,
-                      0.007989012, 0.006989512, 0.006989512,
-                      0.002997501, 0.002997501, 0.0009995,
-                      0.0009995,   0.0009995,   0.0001])
+tail_aep  = np.array([0.033879357, 0.023929191, 0.023929191, 0.01993718, 0.01993718, 0.017939179,
+                      0.007989012, 0.006989512, 0.006989512, 0.002997501, 0.002997501, 0.0009995,
+                      0.0009995, 0.0009995, 0.0001], dtype=float)
 
 # --- Simulation ---
 catalogue_length  = 10     # years per synthetic catalogue
 simulation_number = 1000   # number of independent catalogues (1–1000)
-random_seed       = 42
+random_seed       = 42     # for reproducibility, set to None for random number generation
 
 # --- Visualization ---
-catalogo_visualizado = 500  # which catalogue to display in per-catalogue plots (0-indexed)
+catalogo_visualizado = 360  # which catalogue to display in per-catalogue plots (0-(simulation_number-1))
 
 # --- DRM strategy: Estrategia 1 (CCRIF + PPO + CCF) ---
 # PPO schedule is loaded from file; placeholder here, overwritten below.
@@ -81,15 +81,15 @@ drm_configs = [
         'type': 'ccf',                # BID CCF
         'ccf_maximum': 300,           # $MM total facility
         'ccf_person': 1650,           # $ per affected person
-        'Pop_exposed': 10.83e6,       # persons
+        'Pop_exposed': 10.83e6,       # exposed population
     },
 ]
 drm_names = ['CCRIF', 'BID PPO', 'BID CCF']  # labels aligned with drm_configs
 id_estrategia = 'Estrategia 1'
 
 # --- Ex-post / ex-ante reduction ---
-year_ini      = 2027   # first year of the simulation horizon (for axis labels only)
-discount_rate = 0.12   # annual discount rate for investment cost-benefit
+year_ini      = datetime.now().year + 1   # first year of the simulation horizon (for axis labels only)
+discount_rate = 0.12                      # annual discount rate for investment cost-benefit
 inv = [10, 10, 10, 10, 10,  0,  0,  0,  0,  0]   # $MM invested per year
 rbc = [ 4,  4,  4,  4,  4,  4,  4,  4,  4,  4]   # benefit-to-cost ratio
 hor = [20, 20, 20, 20, 20, 20, 20, 20, 20, 20]   # benefit horizon (years)
@@ -106,7 +106,7 @@ for name, arr in {'inv': inv, 'rbc': rbc, 'hor': hor}.items():
 
 event_loss_df = pd.read_csv(DATA_DIR / 'LEC_event_loss_example.csv')
 
-# ppo_example.csv is a single headerless row: 10 comma-separated amounts
+# ppo_example.csv is a single headerless row: catalogue_length comma-separated amounts
 ppo_schedule = pd.read_csv(DATA_DIR / 'ppo_example.csv', header=None).iloc[0].tolist()
 
 if len(ppo_schedule) != catalogue_length:
@@ -146,21 +146,18 @@ else:
 # --- Plot 1: LEC + bootstrap CI  |  Annual loss bar chart ---
 fig, axes = plt.subplots(1, 2, figsize=(16, 6))
 
-axes[0].plot(empirical, lambda_empirical, 'k-', linewidth=1.5, label='Empirical LEC')
+axes[0].plot(empirical, lambda_empirical, 'k-',  linewidth=1.5, label='Empirical LEC')
 axes[0].plot(lec_mean,  lambda_empirical, 'b-', linewidth=2,   label='Mean Bootstrapped LEC')
-axes[0].fill_betweenx(lambda_empirical, lec_p05, lec_p95,
-                       color=[0.8, 0.8, 1], alpha=0.5, label='90% CI')
+axes[0].fill_betweenx(lambda_empirical, lec_p05, lec_p95, color=[0.8, 0.8, 1], alpha=0.5, label='90% CI')
 if curva_hibrida:
-    axes[0].plot(lec_curve[:, 0], lec_curve[:, 1], 'r-', linewidth=1.5,
-                 label='Hybrid LEC')
+    axes[0].plot(lec_curve[:, 0], lec_curve[:, 1], 'r--', linewidth=1.5, label='Hybrid LEC')
 axes[0].set_xscale('log')
 axes[0].set_yscale('log')
 axes[0].grid(True, which='both')
 axes[0].set_xlabel('Economic Loss [$MM]')
 axes[0].set_ylabel('Annual Frequency of Exceedance')
 axes[0].set_title('Loss Exceedance Curve (LEC)')
-axes[0].text(0.05, 0.8, f'AAL = ${aal:,.2f} MM',
-             transform=axes[0].transAxes, fontsize=10,
+axes[0].text(0.05, 0.8, f'AAL = ${aal:,.2f} MM', transform=axes[0].transAxes, fontsize=10,
              bbox=dict(facecolor='white', edgecolor='black', boxstyle='round'))
 axes[0].legend()
 
@@ -242,20 +239,24 @@ plt.show()
 # 5. TAB 4 — DRM STRATEGY (base catalogue)
 # =============================================================================
 
-drm_result   = apply_strategy(event_catalogue, drm_configs, catalogue_length)
-payout_dfs   = drm_result['payout_dfs']     # [CCRIF_df, PPO_df, CCF_df]
+drm_result     = apply_strategy(event_catalogue, drm_configs, catalogue_length)
+payout_dfs     = drm_result['payout_dfs']     # [CCRIF_df, PPO_df, CCF_df]
 total_coverage = drm_result['total_coverage']
+year_labels    = np.arange(year_ini, year_ini + catalogue_length)
 
 # --- Plot 4: Stacked DRM payouts for selected catalogue ---
 loss_vals = synthetic_annual_df.loc[catalogo_visualizado].values
 p = [df.loc[catalogo_visualizado].values for df in payout_dfs]
 
 fig, ax = plt.subplots(figsize=(10, 6))
-ax.bar(np.arange(1, catalogue_length + 1), loss_vals, label='Pérdidas totales')
-ax.bar(np.arange(1, catalogue_length + 1), p[0], label=drm_names[0])
-ax.bar(np.arange(1, catalogue_length + 1), p[1], bottom=p[0], label=drm_names[1])
-ax.bar(np.arange(1, catalogue_length + 1), p[2], bottom=p[0] + p[1], label=drm_names[2])
-ax.set_ylim(0, 500)
+ax.bar(year_labels, loss_vals, label='Pérdidas totales')
+ax.bar(year_labels, p[0], label=drm_names[0])
+ax.bar(year_labels, p[1], bottom=p[0], label=drm_names[1])
+ax.bar(year_labels, p[2], bottom=p[0] + p[1], label=drm_names[2])
+Lim_axis = loss_vals.max() + 50
+ax.set_ylim(0, Lim_axis)
+ax.set_xticks(year_labels)
+ax.set_xticklabels(year_labels)
 ax.set_xlabel('Año')
 ax.set_ylabel('Pérdidas económicas anuales simuladas ($MM)')
 ax.set_title(f'Evaluación de {id_estrategia} — catálogo {catalogo_visualizado}')
@@ -284,10 +285,54 @@ print(f'Total {catalogue_length}-year FISCAL uncovered median:'
 
 red = compute_expost_reduction(inv, rbc, hor, discount_rate)
 
-year_labels = np.arange(year_ini + 1, year_ini + catalogue_length + 1)
-print(f'\n=== Reducción ex-post acumulada por año ===')
+print('\n=== Reducción ex-post acumulada por año ===')
 for yr, r in zip(year_labels, red):
     print(f'  {yr}: ${r:,.2f} MM/año')
+
+# Total risk reduction in the time horizon of analysis
+red_total = float(np.sum(red))
+
+# Minimum attachment / trigger among the DRM mechanisms
+# This is strategy-dependent: update if the number or type of mechanisms changes.
+loss_threshold = min(
+    drm_configs[0]['attachment_point'],                                        # CCRIF
+    drm_configs[1]['ppo_loss_trigger'],                                        # PPO
+    0.01 * drm_configs[2]['ccf_person'] * drm_configs[2]['Pop_exposed'] / 1e6  # CCF
+)
+
+# Split the LEC into retained and non-retained layers
+losses = lec_curve[:, 0]
+rates  = lec_curve[:, 1]
+
+mask = losses < loss_threshold
+
+Loss_ret, Lamb_ret   = losses[mask],  rates[mask]
+Loss_Nret, Lamb_Nret = losses[~mask], rates[~mask]
+
+AAL_ret  = compute_aal(Loss_ret, Lamb_ret)
+AAL_Nret = compute_aal(Loss_Nret, Lamb_Nret)
+
+if (AAL_ret + AAL_Nret) > 0:
+    red_ret  = red_total * (AAL_ret / (AAL_ret + AAL_Nret))
+    red_Nret = red_total * (AAL_Nret / (AAL_ret + AAL_Nret))
+else:
+    red_ret = 0.0
+    red_Nret = 0.0
+
+# --- Statistics: reduced catalogue + strategy ---
+print(f'\n=== {id_estrategia} — Catálogo reducido (ex-post) ===')
+print(f'Total {catalogue_length}-year loss median:            '
+      f'${np.round(synthetic_annual_df.sum(axis=1).median() - red_total, 1)} MM')
+print(f'Total {catalogue_length}-year coverage median:        '
+      f'${np.round(total_coverage.sum(axis=1).median(), 1)} MM')
+print(f'Total {catalogue_length}-year retention median:       '
+      f'${np.round(synthetic_annual_df[total_coverage == 0].sum(axis=1).median() - red_ret, 1)} MM')
+print(f'Total {catalogue_length}-year uncovered median:       '
+      f'${np.round((synthetic_annual_df[total_coverage != 0].sum(axis=1) - total_coverage.sum(axis=1)).median() - red_Nret, 1)} MM')
+print(f'Total {catalogue_length}-year FISCAL retention median:'
+      f' ${np.round(resp_fiscal * (synthetic_annual_df[total_coverage == 0].sum(axis=1).median() - red_ret), 1)} MM')
+print(f'Total {catalogue_length}-year FISCAL uncovered median:'
+      f' ${np.round(resp_fiscal * ((synthetic_annual_df[total_coverage != 0].sum(axis=1) - total_coverage.sum(axis=1)).median() - red_Nret), 1)} MM')
 
 # =============================================================================
 # 7. EX-ANTE RISK REDUCTION (Método 2)
@@ -299,9 +344,9 @@ reduced_result = generate_reduced_catalogue(
     catalogue_length, simulation_number,
 )
 
-synthetic_annual_red_df    = reduced_result['synthetic_annual_red_df']
-event_catalogue_red        = reduced_result['event_catalogue_red']
-lec_curves_by_target       = reduced_result['lec_curves_by_target']
+synthetic_annual_red_df = reduced_result['synthetic_annual_red_df']
+event_catalogue_red     = reduced_result['event_catalogue_red']
+lec_curves_by_target    = reduced_result['lec_curves_by_target']
 
 # --- Plot 5: Family of reduced LEC curves ---
 plt.figure()
@@ -333,11 +378,13 @@ loss_red_vals = synthetic_annual_red_df.loc[catalogo_visualizado].values
 pr = [df.loc[catalogo_visualizado].values for df in payout_red_dfs]
 
 fig, ax = plt.subplots(figsize=(10, 6))
-ax.bar(np.arange(1, catalogue_length + 1), loss_red_vals, label='Pérdidas totales')
-ax.bar(np.arange(1, catalogue_length + 1), pr[0], label=drm_names[0])
-ax.bar(np.arange(1, catalogue_length + 1), pr[1], bottom=pr[0], label=drm_names[1])
-ax.bar(np.arange(1, catalogue_length + 1), pr[2], bottom=pr[0] + pr[1], label=drm_names[2])
-ax.set_ylim(0, 500)
+ax.bar(year_labels, loss_red_vals, label='Pérdidas totales')
+ax.bar(year_labels, pr[0], label=drm_names[0])
+ax.bar(year_labels, pr[1], bottom=pr[0], label=drm_names[1])
+ax.bar(year_labels, pr[2], bottom=pr[0] + pr[1], label=drm_names[2])
+ax.set_ylim(0, Lim_axis)
+ax.set_xticks(year_labels)
+ax.set_xticklabels(year_labels)
 ax.set_xlabel('Año')
 ax.set_ylabel('Pérdidas económicas anuales simuladas ($MM)')
 ax.set_title(f'Evaluación de {id_estrategia} — catálogo reducido {catalogo_visualizado}')

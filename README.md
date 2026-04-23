@@ -16,7 +16,7 @@ El motor de cálculo del LEC Tool está implementado en un conjunto de módulos 
 | --- | --- |
 | `lec_core.py` | Cálculo de la curva LEC empírica, intervalos de confianza por bootstrap, y curva híbrida |
 | `simulation.py` | Generación de catálogos sintéticos de pérdidas mediante simulación estocástica (Poisson + muestreo inverso) con Common Random Numbers |
-| `drm.py` | Mecanismos de cobertura financiera: seguro paramétrico, PPO, CCF |
+| `risk_management.py` | Mecanismos de cobertura financiera: seguro paramétrico, PPO, CCF |
 | `risk_reduction.py` | Modelado de reducción del riesgo ex-post y ex-ante |
 | `utils.py` | Funciones auxiliares compartidas entre módulos |
 | `hybrid_lec.py` | Construcción de curva híbrida mediante blending log-log entre curva empírica y cola probabilística |
@@ -30,7 +30,7 @@ El motor de cálculo del LEC Tool está implementado en un conjunto de módulos 
 /
 ├── lec_core.py
 ├── simulation.py
-├── drm.py
+├── risk_management.py
 ├── risk_reduction.py
 ├── utils.py
 ├── hybrid_lec.py
@@ -113,10 +113,10 @@ from simulation import build_inv_cdf, make_random_streams, generate_synthetic_ca
 **`generate_synthetic_catalogue(LEC_curve_df, catalogue_length, simulation_number, seed)`**
 Genera `simulation_number` catálogos sintéticos de pérdidas de longitud `catalogue_length` años mediante un proceso de Poisson homogéneo con muestreo inverso. Devuelve los catálogos, DataFrames de pérdidas anuales agregadas, y los streams de números aleatorios (CRN) necesarios para la reducción ex-ante.
 
-## drm.py
+## risk_management.py
 
 ```python
-from drm import apply_strategy
+from risk_management import apply_strategy
 ```
 
 **`apply_strategy(event_catalogue, drm_configs, catalogue_length)`**

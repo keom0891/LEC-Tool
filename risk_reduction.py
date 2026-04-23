@@ -9,9 +9,9 @@ a constant annualised benefit stream derived from cost-benefit analysis.
 The reduction accumulates year-over-year within the simulation horizon.
 
 Ex-ante (Método 2): the same investment programme is represented as a
-downward shift of the LEC curve.  A bisection algorithm calibrates the
+downward shift of the LEC curve. A bisection algorithm calibrates the
 shift parameter (alpha) so that the AAL reduction matches the ex-post
-target.  The modified LEC is then used to regenerate the event catalogue
+target. The modified LEC is then used to regenerate the event catalogue
 using the exact same Compound Poisson draws (CRN streams) as the base
 run, so that differences in outcomes are attributable solely to the
 risk reduction and not to sampling noise.
@@ -132,7 +132,7 @@ def calibrate_LEC_AAL(Ct, L, lam, L_cut=None, tol=1e-6, max_iter=80):
     Calibrate a parametric LEC downward shift to match a target AAL reduction.
 
     Finds alpha such that the shifted LEC achieves an AAL reduction of *Ct*
-    relative to the original curve.  The shift applies a non-linear
+    relative to the original curve. The shift applies a non-linear
     transformation to losses below *L_cut*:
 
         Lr(L) = L · (1 − (1 − L/L_cut)^alpha)   for L ≤ L_cut
