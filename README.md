@@ -91,9 +91,11 @@ Este script ejecuta el flujo completo utilizando los datos de ejemplo incluidos 
 | `ppo_example.csv` | fila sin encabezado | `catalogue_length` valores de cobertura PPO disponible por año ($MM) |
 | `tail_curve.csv` | `tail_loss`, `tail_aep` | Cola probabilística para la curva híbrida: pérdidas ($MM) y tasas de excedencia anuales |
 
-El formato del catálogo de pérdidas se puede descargar [en este link](https://github.com/andresabarca-atlas/BID-LECTool/blob/main/Files/LEC_event_loss_example.csv).
+El formato del catálogo de pérdidas se puede descargar [en este link](data/LEC_event_loss_example.csv).
 
-El formato del archivo PPO se puede descargar [en este link](https://github.com/andresabarca-atlas/BID-LECTool/blob/main/Files/ppo_example.csv).
+El formato del inventario de puntos probabilistas se puede descargar [en este link](data/tail_curve.csv).
+
+El formato del archivo PPO se puede descargar [en este link](data/ppo_example.csv).
 
 ---
 
