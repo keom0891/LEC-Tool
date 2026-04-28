@@ -16,7 +16,7 @@ El motor de cálculo del LEC Tool está implementado en un conjunto de módulos 
 | --- | --- |
 | `lec_core.py` | Cálculo de la curva LEC empírica, intervalos de confianza por bootstrap, y curva híbrida |
 | `simulation.py` | Generación de catálogos sintéticos de pérdidas mediante simulación estocástica (Poisson + muestreo inverso) con Common Random Numbers |
-| `risk_management.py` | Mecanismos de cobertura financiera: seguro paramétrico, PPO, CCF |
+| `risk_management.py` | Mecanismos de cobertura financiera: seguro paramétrico, PPO, CCF, DDO |
 | `risk_reduction.py` | Modelado de reducción del riesgo ex-post y ex-ante |
 | `utils.py` | Funciones auxiliares compartidas entre módulos |
 | `hybrid_lec.py` | Construcción de curva híbrida mediante blending log-log entre curva empírica y cola probabilística |
@@ -40,7 +40,8 @@ El motor de cálculo del LEC Tool está implementado en un conjunto de módulos 
 │   └── devcontainer.json
 └── data/
     ├── LEC_event_loss_example.csv
-    └── ppo_example.csv
+    ├── ppo_example.csv
+    └── tail_curve.csv
 ```
 
 ---
@@ -78,11 +79,17 @@ Este script ejecuta el flujo completo utilizando los datos de ejemplo incluidos 
 2. Calcula la curva LEC empírica con intervalos de confianza
 3. Construye la curva híbrida (opcional)
 4. Genera catálogos sintéticos mediante simulación estocástica
-5. Evalúa la Estrategia 1 de gestión del riesgo (CCRIF + PPO + CCF)
+5. Evalúa la Estrategia 1 de gestión del riesgo (CCRIF + PPO + CCF + DDO)
 6. Aplica reducción del riesgo ex-ante
 7. Genera todos los gráficos de resultados
 
 ## Archivos de entrada
+
+| Archivo | Columnas / formato | Descripción |
+| --- | --- | --- |
+| `LEC_event_loss_example.csv` | `year`, `econ_loss` | Catálogo histórico de pérdidas por evento ($MM) |
+| `ppo_example.csv` | fila sin encabezado | `catalogue_length` valores de cobertura PPO disponible por año ($MM) |
+| `tail_curve.csv` | `tail_loss`, `tail_aep` | Cola probabilística para la curva híbrida: pérdidas ($MM) y tasas de excedencia anuales |
 
 El formato del catálogo de pérdidas se puede descargar [en este link](https://github.com/andresabarca-atlas/BID-LECTool/blob/main/Files/LEC_event_loss_example.csv).
 
@@ -127,10 +134,11 @@ Instrumentos disponibles (`'type'`):
 | Tipo | Instrumento | Parámetros clave |
 | --- | --- | --- |
 | `'insurance'` | Seguro paramétrico (ej. CCRIF) | `attachment_point`, `exhaustion_point`, `ceding_percentage` |
-| `'ppo'` | PPO de activación única | `ppo_schedule`, `ppo_loss_trigger` |
+| `'ppo'` | PPO de activación única por catálogo | `ppo_schedule`, `ppo_loss_trigger` |
 | `'ccf'` | CCF con techo acumulativo | `ccf_maximum`, `ccf_person`, `Pop_exposed` |
+| `'ddo'` | DDO con umbral de activación y pago fijo | `ddo_threshold`, `ddo_available` |
 
-> **TODO:** Mecanismo DDO — pendiente de especificación.
+> La cobertura total de todos los instrumentos está limitada automáticamente a no superar la pérdida bruta por evento (mediante escala proporcional).
 
 Ejemplo de configuración:
 
@@ -152,6 +160,11 @@ drm_configs = [
         'ccf_maximum': 300,
         'ccf_person': 1650,
         'Pop_exposed': 10.83e6,
+    },
+    {
+        'type': 'ddo',
+        'ddo_threshold': 120,   # $MM — pérdida mínima para activación
+        'ddo_available': 110,   # $MM — pago fijo al activarse
     },
 ]
 ```

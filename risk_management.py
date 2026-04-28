@@ -16,9 +16,7 @@ Instruments implemented
 standard_insurance_payout   Parametric/indemnity coverage with attachment and exhaustion.
 apply_ppo_coverage          Contingent credit (PPO) activated once per catalogue.
 ccf_coverage                Contingent credit facility (CCF) with cumulative depletion.
-
-# TODO: DDO (Deferred Drawdown Option) — to be implemented when the
-#       instrument specification is finalised.
+ddo_coverage                Deferred Drawdown Option (DDO) with a loss trigger threshold.
 
 Pipeline function
 -----------------
@@ -157,9 +155,6 @@ def ccf_coverage(values, ccf_maximum, ccf_person, Pop_exposed):
 
     A minimum loss threshold is applied:
         loss < 0.01 · Pop_exposed · ccf_person / 1e6  → payout = 0
-
-    # TODO: DDO — a deferred drawdown variant of this instrument is
-    #       planned; the damage function above may be shared.
     """
     def _affected_persons(loss):
         return np.exp(0.001074 * np.log(loss * 1000) ** 3.0883 + 7.9346)
@@ -179,6 +174,45 @@ def ccf_coverage(values, ccf_maximum, ccf_person, Pop_exposed):
             ccf_applied.append(ccf_app)
 
     return ccf_applied
+
+
+def ddo_coverage(values, ddo_threshold, ddo_available):
+    """
+    Apply a Deferred Drawdown Option (DDO) to a sequence of event losses.
+
+    Triggers on every event whose loss exceeds ``ddo_threshold`` and pays a
+    fixed amount ``ddo_available``.  Unlike the PPO, the DDO resets each event
+    (no single-activation limit).  A local cap ensures the payout for any
+    single event never exceeds the event loss itself; the broader constraint
+    that the *sum* of all instrument payouts cannot exceed the gross loss is
+    enforced by ``apply_strategy``.
+
+    Parameters
+    ----------
+    values : array_like
+        Event loss amounts ($MM), in chronological order.
+    ddo_threshold : float
+        Loss level ($MM) that must be exceeded to trigger the DDO.
+    ddo_available : float
+        Fixed DDO payout ($MM) issued each time the trigger is met.
+
+    Returns
+    -------
+    list of float
+        DDO payout for each event ($MM).  Same length as *values*.
+
+    Examples
+    --------
+    >>> ddo_coverage([50, 130, 20, 200], ddo_threshold=100, ddo_available=110)
+    [0.0, 110.0, 0.0, 110.0]
+    """
+    applied = []
+    for loss in values:
+        if loss > ddo_threshold:
+            applied.append(min(ddo_available, loss))
+        else:
+            applied.append(0.0)
+    return applied
 
 
 # ---------------------------------------------------------------------------
@@ -221,6 +255,10 @@ def apply_strategy(event_catalogue, drm_configs, catalogue_length):
           ccf_person          float  ($ per person)
           Pop_exposed         float  (number of people)
 
+        type 'ddo':
+          ddo_threshold       float  ($MM)
+          ddo_available       float  ($MM)
+
     catalogue_length : int
         Number of years per simulation.  Must match the catalogue.
 
@@ -243,13 +281,14 @@ def apply_strategy(event_catalogue, drm_configs, catalogue_length):
     each event is looked up from the year the event falls in.
 
     Instruments are independent: each sees the original gross loss, not the
-    loss net of prior instruments.  The strategy net loss is therefore:
-        net_loss = gross_loss − total_coverage
+    loss net of prior instruments.  After all per-event payouts are computed,
+    a proportional cap is applied so that the total payout for any single event
+    never exceeds the gross event loss.  The strategy net loss is therefore:
+        net_loss = gross_loss − total_coverage  (≥ 0 by construction)
     """
     simulation_number = len(event_catalogue)
     column_names = [f'Year_{i + 1}' for i in range(catalogue_length)]
 
-    # Preallocate one accumulation list per instrument
     n_instruments = len(drm_configs)
     payout_lists = [[] for _ in range(n_instruments)]
 
@@ -258,11 +297,13 @@ def apply_strategy(event_catalogue, drm_configs, catalogue_length):
         losses_i = event_catalogue[i]['losses']
         loss_list = losses_i.tolist()
 
-        for j, cfg in enumerate(drm_configs):
+        # --- compute per-event payouts for every instrument ---
+        event_payouts = []
+        for cfg in drm_configs:
             instrument_type = cfg['type']
 
             if instrument_type == 'insurance':
-                payouts = np.array(standard_insurance_payout(
+                p = np.array(standard_insurance_payout(
                     loss_list,
                     attachment_point=cfg['attachment_point'],
                     exhaustion_point=cfg['exhaustion_point'],
@@ -271,7 +312,7 @@ def apply_strategy(event_catalogue, drm_configs, catalogue_length):
 
             elif instrument_type == 'ppo':
                 if len(times_i) == 0:
-                    payouts = np.array([])
+                    p = np.array([])
                 else:
                     event_years = np.floor(times_i).astype(int)
                     schedule = cfg['ppo_schedule']
@@ -279,28 +320,46 @@ def apply_strategy(event_catalogue, drm_configs, catalogue_length):
                         schedule[y] if 0 <= y < len(schedule) else 0.0
                         for y in event_years
                     ]
-                    payouts = np.array(apply_ppo_coverage(
+                    p = np.array(apply_ppo_coverage(
                         loss_list,
                         ppo_available=ppo_available_event,
                         ppo_loss_trigger=cfg['ppo_loss_trigger'],
                     ))
 
             elif instrument_type == 'ccf':
-                payouts = np.array(ccf_coverage(
+                p = np.array(ccf_coverage(
                     loss_list,
                     ccf_maximum=cfg['ccf_maximum'],
                     ccf_person=cfg['ccf_person'],
                     Pop_exposed=cfg['Pop_exposed'],
                 ))
 
+            elif instrument_type == 'ddo':
+                p = np.array(ddo_coverage(
+                    loss_list,
+                    ddo_threshold=cfg['ddo_threshold'],
+                    ddo_available=cfg['ddo_available'],
+                ))
+
             else:
                 raise ValueError(
                     f"Unknown instrument type '{instrument_type}'. "
-                    "Supported: 'insurance', 'ppo', 'ccf'."
+                    "Supported: 'insurance', 'ppo', 'ccf', 'ddo'."
                 )
 
+            event_payouts.append(p)
+
+        # --- cap total per-event payout to gross event loss ---
+        if len(losses_i) > 0 and n_instruments > 0:
+            total_p = sum(event_payouts)
+            # scale factor per event: 1.0 where total ≤ loss, < 1.0 otherwise
+            scale = np.where(total_p > 0, np.minimum(losses_i / total_p, 1.0), 1.0)
+            event_payouts = [p * scale for p in event_payouts]
+
+        # --- aggregate each instrument's payouts to annual totals ---
+        for j, p in enumerate(event_payouts):
             payout_lists[j].append(
-                aggregate_event_values_by_year(times_i, payouts, catalogue_length)
+                aggregate_event_values_by_year(times_i, p, catalogue_length)
             )
 
     payout_dfs = [

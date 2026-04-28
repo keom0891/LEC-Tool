@@ -21,6 +21,7 @@ Input files (data/)
 -------------------
 LEC_event_loss_example.csv  columns: year (int), econ_loss (float $MM)
 ppo_example.csv             single headerless row: 10 PPO amounts ($MM)
+tail_curve.csv              columns: tail_loss (float $MM), tail_aep (float)
 """
 
 import numpy as np
@@ -46,14 +47,6 @@ resp_fiscal       = 0.60   # fiscal responsibility share (0–1)
 loss_scale_factor = 1.0    # multiplicative scale on all losses
 freq_scale_factor = 1.0    # multiplicative scale on all exceedance rates
 curva_hibrida     = True   # blend empirical LEC with probabilistic tail
-
-# --- Tail curve (used when curva_hibrida=True) ---
-tail_loss = np.array([1000, 1500, 2000, 2500, 3000, 3500,
-                      4000, 4500, 5000, 5500, 6000, 6500,
-                      7000, 7500, 8000], dtype=float)
-tail_aep  = np.array([0.033879357, 0.023929191, 0.023929191, 0.01993718, 0.01993718, 0.017939179,
-                      0.007989012, 0.006989512, 0.006989512, 0.002997501, 0.002997501, 0.0009995,
-                      0.0009995, 0.0009995, 0.0001], dtype=float)
 
 # --- Simulation ---
 catalogue_length  = 10     # years per synthetic catalogue
@@ -83,14 +76,20 @@ drm_configs = [
         'ccf_person': 1650,           # $ per affected person
         'Pop_exposed': 10.83e6,       # exposed population
     },
+    {
+        'type': 'ddo',                # BID DDO
+        'ddo_threshold': 120,         # $MM — trigger loss level
+        'ddo_available': 90,          # $MM — fixed payout when triggered
+    }
 ]
-drm_names = ['CCRIF', 'BID PPO', 'BID CCF']  # labels aligned with drm_configs
-id_estrategia = 'Estrategia 1'
+
+drm_names = ['CCRIF', 'BID PPO', 'BID CCF', 'BID DDO']  # labels aligned with drm_configs
+id_estrategia = 'Estrategia 1' #Label for the strategy
 
 # --- Ex-post / ex-ante reduction ---
 year_ini      = datetime.now().year + 1   # first year of the simulation horizon (for axis labels only)
 discount_rate = 0.12                      # annual discount rate for investment cost-benefit
-inv = [10, 10, 10, 10, 10,  0,  0,  0,  0,  0]   # $MM invested per year
+inv = [ 5, 0, 10, 0, 20,  0,  10,  0,  5,  0]   # $MM invested per year
 rbc = [ 4,  4,  4,  4,  4,  4,  4,  4,  4,  4]   # benefit-to-cost ratio
 hor = [20, 20, 20, 20, 20, 20, 20, 20, 20, 20]   # benefit horizon (years)
 
@@ -105,6 +104,10 @@ for name, arr in {'inv': inv, 'rbc': rbc, 'hor': hor}.items():
 # =============================================================================
 
 event_loss_df = pd.read_csv(DATA_DIR / 'LEC_event_loss_example.csv')
+
+tail_curve_df = pd.read_csv(DATA_DIR / 'tail_curve.csv')
+tail_loss = tail_curve_df['tail_loss'].to_numpy(dtype=float)
+tail_aep  = tail_curve_df['tail_aep'].to_numpy(dtype=float)
 
 # ppo_example.csv is a single headerless row: catalogue_length comma-separated amounts
 ppo_schedule = pd.read_csv(DATA_DIR / 'ppo_example.csv', header=None).iloc[0].tolist()
@@ -240,7 +243,7 @@ plt.show()
 # =============================================================================
 
 drm_result     = apply_strategy(event_catalogue, drm_configs, catalogue_length)
-payout_dfs     = drm_result['payout_dfs']     # [CCRIF_df, PPO_df, CCF_df]
+payout_dfs     = drm_result['payout_dfs']     
 total_coverage = drm_result['total_coverage']
 year_labels    = np.arange(year_ini, year_ini + catalogue_length)
 
@@ -253,6 +256,10 @@ ax.bar(year_labels, loss_vals, label='Pérdidas totales')
 ax.bar(year_labels, p[0], label=drm_names[0])
 ax.bar(year_labels, p[1], bottom=p[0], label=drm_names[1])
 ax.bar(year_labels, p[2], bottom=p[0] + p[1], label=drm_names[2])
+ax.bar(year_labels, p[3], bottom=p[0] + p[1] + p[2], label=drm_names[3])
+for x, v in zip(year_labels, loss_vals):
+    if v > 0:
+        ax.text(x, v, f'${v:.1f}MM', ha='center', va='bottom', fontsize=9)
 Lim_axis = loss_vals.max() + 50
 ax.set_ylim(0, Lim_axis)
 ax.set_xticks(year_labels)
@@ -382,6 +389,10 @@ ax.bar(year_labels, loss_red_vals, label='Pérdidas totales')
 ax.bar(year_labels, pr[0], label=drm_names[0])
 ax.bar(year_labels, pr[1], bottom=pr[0], label=drm_names[1])
 ax.bar(year_labels, pr[2], bottom=pr[0] + pr[1], label=drm_names[2])
+ax.bar(year_labels, pr[3], bottom=pr[0] + pr[1] + pr[2], label=drm_names[3])
+for x, v in zip(year_labels, loss_red_vals):
+    if v > 0:
+        ax.text(x, v, f'${v:.1f}MM', ha='center', va='bottom', fontsize=8)
 ax.set_ylim(0, Lim_axis)
 ax.set_xticks(year_labels)
 ax.set_xticklabels(year_labels)
