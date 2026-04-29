@@ -2,26 +2,20 @@
 """
 risk_reduction.py — LEC Tool
 ==============================
-Ex-post and ex-ante risk reduction mechanisms.
+Ex-ante risk reduction modelling.
 
-Ex-post (Método 1): physical investments reduce the expected annual loss by
-a constant annualised benefit stream derived from cost-benefit analysis.
-The reduction accumulates year-over-year within the simulation horizon.
-
-Ex-ante (Método 2): the same investment programme is represented as a
+The user-supplied per-year AAL reduction targets are represented as a
 downward shift of the LEC curve. A bisection algorithm calibrates the
-shift parameter (alpha) so that the AAL reduction matches the ex-post
-target. The modified LEC is then used to regenerate the event catalogue
-using the exact same Compound Poisson draws (CRN streams) as the base
-run, so that differences in outcomes are attributable solely to the
-risk reduction and not to sampling noise.
+shift parameter (alpha) so that the shifted curve achieves the requested
+AAL reduction. The modified LEC is then used to regenerate the event
+catalogue using the exact same Compound Poisson draws (CRN streams) as
+the base run, so that differences in outcomes are attributable solely to
+the risk reduction and not to sampling noise.
 
 All functions are pure (no file I/O, no plotting).
 
 Functions
 ---------
-annual_constant_benefit     Annualised benefit from a single investment tranche.
-compute_expost_reduction    Cumulative reduction vector over the simulation horizon.
 calibrate_LEC_AAL           Calibrate LEC shift to match a target AAL reduction.
 generate_reduced_catalogue  Replay CRN streams with per-year reduced LEC curves.
 """
@@ -31,96 +25,6 @@ import pandas as pd
 
 from simulation import build_inv_cdf
 from utils import compute_aal
-
-
-# ---------------------------------------------------------------------------
-# Ex-post helpers
-# ---------------------------------------------------------------------------
-
-def annual_constant_benefit(inv_i, rbc_i, hor_i, r):
-    """
-    Compute the equivalent annual benefit of a single investment tranche.
-
-    Converts a lump-sum benefit (inv × rbc) spread over *hor_i* years into
-    a constant annuity, discounting at rate *r*.  This represents the
-    annualised AAL reduction attributable to the investment.
-
-    Parameters
-    ----------
-    inv_i : float
-        Investment amount ($MM) in year i.
-    rbc_i : float
-        Benefit-to-cost ratio (dimensionless).
-    hor_i : int or float
-        Benefit horizon in years.
-    r : float
-        Annual discount rate (e.g. 0.12 for 12 %).
-
-    Returns
-    -------
-    float
-        Equivalent annual benefit ($MM/year).
-
-    Notes
-    -----
-    When r == 0 the function falls back to a simple uniform split
-    (pv_benefit / hor_i) to avoid division by zero.
-    """
-    pv_benefit = inv_i * rbc_i
-    if hor_i <= 0:
-        return 0.0
-    if r == 0:
-        return pv_benefit / hor_i
-    return pv_benefit * (r / (1.0 - (1.0 + r) ** (-hor_i)))
-
-
-def compute_expost_reduction(inv, rbc, hor, discount_rate):
-    """
-    Build the cumulative annual AAL reduction vector for the simulation horizon.
-
-    Each year's entry is the total reduction already in place at the
-    *start* of that year, i.e. the sum of all benefit streams from
-    investments made in prior years.  Year 0 always starts at 0.
-
-    Parameters
-    ----------
-    inv : list of float, length catalogue_length
-        Investment amount per year ($MM).  Use 0 for years with no investment.
-    rbc : list of float, length catalogue_length
-        Benefit-to-cost ratio per investment year.
-    hor : list of int, length catalogue_length
-        Benefit horizon (years) for each investment year.
-    discount_rate : float
-        Annual discount rate applied to all investment tranches.
-
-    Returns
-    -------
-    list of float, length catalogue_length
-        red[y] = cumulative AAL reduction in place at year y ($MM).
-        Pass directly to ``generate_reduced_catalogue`` as *red*.
-
-    Raises
-    ------
-    ValueError
-        If *inv*, *rbc*, and *hor* do not all have the same length.
-
-    Examples
-    --------
-    >>> compute_expost_reduction([10, 0], [4, 0], [20, 0], discount_rate=0.12)
-    [0.0, 5.35...]   # year 0 has no prior investment; year 1 has one tranche
-    """
-    if not (len(inv) == len(rbc) == len(hor)):
-        raise ValueError(
-            f"inv, rbc, and hor must have the same length "
-            f"(got {len(inv)}, {len(rbc)}, {len(hor)})."
-        )
-
-    red = []
-    cumulative = 0.0
-    for i in range(len(inv)):
-        red.append(cumulative)
-        cumulative += annual_constant_benefit(inv[i], rbc[i], hor[i], discount_rate)
-    return red
 
 
 # ---------------------------------------------------------------------------

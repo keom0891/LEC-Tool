@@ -17,7 +17,7 @@ El motor de cálculo del LEC Tool está implementado en un conjunto de módulos 
 | `lec_core.py` | Cálculo de la curva LEC empírica, intervalos de confianza por bootstrap, y curva híbrida |
 | `simulation.py` | Generación de catálogos sintéticos de pérdidas mediante simulación estocástica (Poisson + muestreo inverso) con Common Random Numbers |
 | `risk_management.py` | Mecanismos de cobertura financiera: seguro paramétrico, PPO, CCF, DDO |
-| `risk_reduction.py` | Modelado de reducción del riesgo ex-post y ex-ante |
+| `risk_reduction.py` | Modelado de reducción del riesgo ex-ante: calibración de desplazamiento de curva LEC y generación de catálogo reducido |
 | `utils.py` | Funciones auxiliares compartidas entre módulos |
 | `hybrid_lec.py` | Construcción de curva híbrida mediante blending log-log entre curva empírica y cola probabilística |
 | `main.py` | Script de demostración completo: carga datos, ejecuta todos los módulos y genera visualizaciones |
@@ -80,7 +80,7 @@ Este script ejecuta el flujo completo utilizando los datos de ejemplo incluidos 
 3. Construye la curva híbrida (opcional)
 4. Genera catálogos sintéticos mediante simulación estocástica
 5. Evalúa la Estrategia 1 de gestión del riesgo (CCRIF + PPO + CCF + DDO)
-6. Aplica reducción del riesgo ex-ante
+6. Aplica reducción del riesgo ex-ante y evalúa la estrategia sobre el catálogo reducido
 7. Genera todos los gráficos de resultados
 
 ## Archivos de entrada
@@ -129,7 +129,7 @@ from risk_management import apply_strategy
 ```
 
 **`apply_strategy(event_catalogue, drm_configs, catalogue_length)`**
-Aplica una estrategia de gestión del riesgo definida como lista de dicts sobre todos los catálogos sintéticos. Devuelve los DataFrames de pago por instrumento y la cobertura total.
+Aplica una estrategia de gestión del riesgo definida como lista de dicts sobre todos los catálogos sintéticos. Devuelve los DataFrames de pago por instrumento y la cobertura total. Cada dict debe incluir `'name'` (etiqueta para gráficos) y `'type'` (instrumento), además de los parámetros específicos del instrumento.
 
 Instrumentos disponibles (`'type'`):
 
@@ -147,23 +147,27 @@ Ejemplo de configuración:
 ```python
 drm_configs = [
     {
+        'name': 'CCRIF',
         'type': 'insurance',
         'attachment_point': 50,
         'exhaustion_point': 190,
         'ceding_percentage': 0.066,
     },
     {
+        'name': 'BID PPO',
         'type': 'ppo',
         'ppo_schedule': [0, 2, 10, 25, 35, 42, 46, 46, 46, 46],
         'ppo_loss_trigger': 120,
     },
     {
+        'name': 'BID CCF',
         'type': 'ccf',
         'ccf_maximum': 300,
         'ccf_person': 1650,
         'Pop_exposed': 10.83e6,
     },
     {
+        'name': 'BID DDO',
         'type': 'ddo',
         'ddo_threshold': 120,   # $MM — pérdida mínima para activación
         'ddo_available': 110,   # $MM — pago fijo al activarse
@@ -174,17 +178,14 @@ drm_configs = [
 ## risk_reduction.py
 
 ```python
-from risk_reduction import compute_expost_reduction, calibrate_LEC_AAL, generate_reduced_catalogue
+from risk_reduction import generate_reduced_catalogue
 ```
 
-**`compute_expost_reduction(inv, rbc, hor, discount_rate)`**
-Calcula el vector de reducción anual acumulada de AAL a partir de una tabla de inversiones en reducción del riesgo (ex-post).
-
 **`calibrate_LEC_AAL(Ct, L, lam)`**
-Calibra por bisección el parámetro alpha que desplaza la curva LEC para lograr exactamente `Ct` de reducción en AAL (ex-ante).
+Calibra por bisección el parámetro alpha que desplaza la curva LEC para lograr exactamente `Ct` de reducción en AAL.
 
-**`generate_reduced_catalogue(LEC_curves, red, N_events, U_times, U_loss, catalogue_length, simulation_number)`**
-Genera el catálogo reducido reutilizando los streams CRN del catálogo base para garantizar comparabilidad.
+**`generate_reduced_catalogue(base_lec_curve, red, N_events, U_times, U_loss, catalogue_length, simulation_number)`**
+Genera el catálogo reducido reutilizando los streams CRN del catálogo base para garantizar comparabilidad. `red` es una lista de reducción acumulada de AAL por año ($MM), definida directamente por el usuario.
 
 ---
 
