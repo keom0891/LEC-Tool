@@ -32,7 +32,7 @@ from datetime import datetime
 from lec_core import compute_empirical_lec, build_hybrid_lec
 from simulation import generate_synthetic_catalogue
 from risk_management import apply_strategy
-from risk_reduction import generate_reduced_catalogue
+from risk_reduction import compute_reduction_schedule, generate_reduced_catalogue
 
 # =============================================================================
 # 1. PARAMETERS
@@ -49,10 +49,10 @@ curva_hibrida     = True   # blend empirical LEC with probabilistic tail
 # --- Simulation ---
 catalogue_length  = 10     # years per synthetic catalogue
 simulation_number = 1000   # number of independent catalogues (1–1000)
-random_seed       = 42     # for reproducibility, set to None for random number generation
+random_seed       = 99     # for reproducibility, set to None for random number generation
 
 # --- Visualization ---
-catalogo_visualizado = 360  # which catalogue to display in per-catalogue plots (0-(simulation_number-1))
+catalogo_visualizado = 860  # which catalogue to display in per-catalogue plots (0-(simulation_number-1))
 
 # --- DRM strategy: Estrategia 1 (CCRIF + PPO + CCF) ---
 # PPO schedule is loaded from file; placeholder here, overwritten below.
@@ -83,13 +83,26 @@ drm_configs = [
         'ddo_threshold': 120,         # $MM — trigger loss level
         'ddo_available': 90,          # $MM — fixed payout when triggered
     },
+    {
+        'name': 'WB DDO',
+        'type': 'ddo',
+        'ddo_threshold': 120,         # $MM — trigger loss level
+        'ddo_available': 110,          # $MM — fixed payout when triggered
+    },
 ]
 
 id_estrategia = 'Estrategia 1'
 
 # --- Ex-ante reduction ---
-year_ini = datetime.now().year + 1   # first year of the simulation horizon (for axis labels only)
-red = [0.0, 2.7, 2.7, 8.0, 8.0, 18.7, 18.7, 24.1, 24.1, 26.8]  # per-year cumulative AAL reduction ($MM)
+year_ini      = datetime.now().year + 1   # first year of the simulation horizon (for axis labels only)
+discount_rate = 0.12                      # annual discount rate for investment cost-benefit
+inv = [ 5,  0, 10,  0, 20,  0, 10,  0,  5,  0]   # $MM invested per year
+rbc = [ 4,  4,  4,  4,  4,  4,  4,  4,  4,  4]  # benefit-to-cost ratio
+hor = [20, 20, 20, 20, 20, 20, 20, 20, 20, 20]  # benefit horizon (years)
+
+for name, arr in {'inv': inv, 'rbc': rbc, 'hor': hor}.items():
+    if len(arr) != catalogue_length:
+        raise ValueError(f"'{name}' has length {len(arr)} but catalogue_length={catalogue_length}.")
 
 # =============================================================================
 # 2. INPUT DATA
@@ -281,6 +294,8 @@ print(f'Total {catalogue_length}-year FISCAL uncovered median:'
 # =============================================================================
 # 6. RISK REDUCTION Mechanism
 # =============================================================================
+
+red = compute_reduction_schedule(inv, rbc, hor, discount_rate)
 
 reduced_result = generate_reduced_catalogue(
     lec_curve, red,

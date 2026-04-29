@@ -16,6 +16,8 @@ All functions are pure (no file I/O, no plotting).
 
 Functions
 ---------
+annual_constant_benefit     Annualised benefit from a single investment tranche.
+compute_reduction_schedule  Per-year cumulative AAL reduction from investment parameters.
 calibrate_LEC_AAL           Calibrate LEC shift to match a target AAL reduction.
 generate_reduced_catalogue  Replay CRN streams with per-year reduced LEC curves.
 """
@@ -25,6 +27,89 @@ import pandas as pd
 
 from simulation import build_inv_cdf
 from utils import compute_aal
+
+
+# ---------------------------------------------------------------------------
+# Investment-to-reduction schedule
+# ---------------------------------------------------------------------------
+
+def annual_constant_benefit(inv_i, rbc_i, hor_i, r):
+    """
+    Compute the equivalent annual benefit of a single investment tranche.
+
+    Converts a lump-sum benefit (inv × rbc) spread over *hor_i* years into
+    a constant annuity, discounting at rate *r*.
+
+    Parameters
+    ----------
+    inv_i : float
+        Investment amount ($MM) in year i.
+    rbc_i : float
+        Benefit-to-cost ratio (dimensionless).
+    hor_i : int or float
+        Benefit horizon in years.
+    r : float
+        Annual discount rate (e.g. 0.12 for 12 %).
+
+    Returns
+    -------
+    float
+        Equivalent annual benefit ($MM/year).
+
+    Notes
+    -----
+    When r == 0 the function falls back to a simple uniform split
+    (pv_benefit / hor_i) to avoid division by zero.
+    """
+    pv_benefit = inv_i * rbc_i
+    if hor_i <= 0:
+        return 0.0
+    if r == 0:
+        return pv_benefit / hor_i
+    return pv_benefit * (r / (1.0 - (1.0 + r) ** (-hor_i)))
+
+
+def compute_reduction_schedule(inv, rbc, hor, discount_rate):
+    """
+    Build the per-year cumulative AAL reduction vector from investment parameters.
+
+    Each entry red[y] is the total AAL reduction already in place at the
+    start of year y, accumulated from all investment tranches made in
+    prior years.  Year 0 always starts at 0.
+
+    Parameters
+    ----------
+    inv : list of float, length catalogue_length
+        Investment amount per year ($MM).  Use 0 for years with no investment.
+    rbc : list of float, length catalogue_length
+        Benefit-to-cost ratio per investment year.
+    hor : list of int, length catalogue_length
+        Benefit horizon (years) for each investment year.
+    discount_rate : float
+        Annual discount rate applied to all investment tranches.
+
+    Returns
+    -------
+    list of float, length catalogue_length
+        red[y] = cumulative AAL reduction in place at year y ($MM).
+        Pass directly to ``generate_reduced_catalogue`` as *red*.
+
+    Raises
+    ------
+    ValueError
+        If *inv*, *rbc*, and *hor* do not all have the same length.
+    """
+    if not (len(inv) == len(rbc) == len(hor)):
+        raise ValueError(
+            f"inv, rbc, and hor must have the same length "
+            f"(got {len(inv)}, {len(rbc)}, {len(hor)})."
+        )
+    red = []
+    cumulative = 0.0
+    for i in range(len(inv)):
+        red.append(cumulative)
+        cumulative += annual_constant_benefit(inv[i], rbc[i], hor[i], discount_rate)
+    return red
 
 
 # ---------------------------------------------------------------------------
