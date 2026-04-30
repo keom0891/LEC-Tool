@@ -353,7 +353,7 @@ def apply_strategy(event_catalogue, drm_configs, catalogue_length):
         if len(losses_i) > 0 and n_instruments > 0:
             total_p = sum(event_payouts)
             # scale factor per event: 1.0 where total ≤ loss, < 1.0 otherwise
-            scale = np.where(total_p > 0, np.minimum(losses_i / total_p, 1.0), 1.0)
+            scale = np.minimum(np.divide(losses_i, total_p, out=np.ones_like(losses_i, dtype=float), where=total_p > 0), 1.0)
             event_payouts = [p * scale for p in event_payouts]
 
         # --- aggregate each instrument's payouts to annual totals ---
