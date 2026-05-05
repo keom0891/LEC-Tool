@@ -75,7 +75,7 @@ def standard_insurance_payout(values, attachment_point=15, exhaustion_point=50,
     return payouts
 
 
-def apply_ppo_coverage(values, ppo_available, ppo_loss_trigger):
+def apply_ppo_coverage(values, ppo_available, ccf_applied):
     """
     Apply a Pre-arranged Parametric Option (PPO) to a sequence of event losses.
 
@@ -91,8 +91,8 @@ def apply_ppo_coverage(values, ppo_available, ppo_loss_trigger):
         Maximum PPO payout available at the time of each event ($MM).
         Must be the same length as *values*.  Typically a step function
         that ramps up as credit is drawn down over years.
-    ppo_loss_trigger : float
-        Loss threshold ($MM) that must be exceeded to activate the PPO.
+    ccf_applied : float
+        CCF payout that must be exceeded to activate the PPO ($MM).
 
     Returns
     -------
@@ -111,7 +111,7 @@ def apply_ppo_coverage(values, ppo_available, ppo_loss_trigger):
     ppo_triggered = False
 
     for i, loss in enumerate(values):
-        if loss > ppo_loss_trigger and not ppo_triggered:
+        if ccf_applied[i] > 0 and not ppo_triggered:
             ppo_applied.append(ppo_available[i])
             ppo_triggered = True
         else:
@@ -296,7 +296,19 @@ def apply_strategy(event_catalogue, drm_configs, catalogue_length):
         times_i = event_catalogue[i]['times']
         losses_i = event_catalogue[i]['losses']
         loss_list = losses_i.tolist()
+        
+        # --- Compute CCF once per simulation if it exists ---
+        ccf_trigger = None
+        ccf_cfg = next((cfg for cfg in drm_configs if cfg['type'] == 'ccf'), None)
 
+        if ccf_cfg is not None:
+            ccf_trigger = np.array(ccf_coverage(
+                loss_list,
+                ccf_maximum=ccf_cfg['ccf_maximum'],
+                ccf_person=ccf_cfg['ccf_person'],
+                Pop_exposed=ccf_cfg['Pop_exposed'],
+            ))
+            
         # --- compute per-event payouts for every instrument ---
         event_payouts = []
         for cfg in drm_configs:
@@ -311,28 +323,31 @@ def apply_strategy(event_catalogue, drm_configs, catalogue_length):
                 ))
 
             elif instrument_type == 'ppo':
+                if ccf_trigger is None:
+                    raise ValueError(
+                        "PPO depends on CCF activation, but no 'ccf' "
+                        "configuration was found in drm_configs."
+                    )
+
                 if len(times_i) == 0:
                     p = np.array([])
                 else:
                     event_years = np.floor(times_i).astype(int)
                     schedule = cfg['ppo_schedule']
+
                     ppo_available_event = [
                         schedule[y] if 0 <= y < len(schedule) else 0.0
                         for y in event_years
                     ]
+
                     p = np.array(apply_ppo_coverage(
                         loss_list,
                         ppo_available=ppo_available_event,
-                        ppo_loss_trigger=cfg['ppo_loss_trigger'],
+                        ccf_applied=ccf_trigger,
                     ))
 
             elif instrument_type == 'ccf':
-                p = np.array(ccf_coverage(
-                    loss_list,
-                    ccf_maximum=cfg['ccf_maximum'],
-                    ccf_person=cfg['ccf_person'],
-                    Pop_exposed=cfg['Pop_exposed'],
-                ))
+                p = ccf_trigger.copy()
 
             elif instrument_type == 'ddo':
                 p = np.array(ddo_coverage(

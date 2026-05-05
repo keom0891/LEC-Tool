@@ -68,7 +68,6 @@ drm_configs = [
         'name': 'BID PPO',
         'type': 'ppo',
         'ppo_schedule': None,         # set from ppo_example.csv (length must == catalogue_length)
-        'ppo_loss_trigger': 120,      # $MM
     },
     {
         'name': 'BID CCF',
