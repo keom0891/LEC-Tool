@@ -77,25 +77,25 @@ drm_configs = [
         'Pop_exposed': 10.83e6,       # exposed population
     },
     {
-        'name': 'BID DDO',
+        'name': 'BID DDO $40MM',
         'type': 'ddo',
         'ddo_threshold': 120,         # $MM — trigger loss level
-        'ddo_available': 90,          # $MM — fixed payout when triggered
+        'ddo_available': 40,          # $MM — fixed payout when triggered
     },
     {
         'name': 'WB DDO',
         'type': 'ddo',
         'ddo_threshold': 120,         # $MM — trigger loss level
-        'ddo_available': 110,          # $MM — fixed payout when triggered
+        'ddo_available': 40,          # $MM — fixed payout when triggered
     },
 ]
 
-id_estrategia = 'Estrategia 1'
+id_estrategia = 'Estrategia 2'
 
 # --- Ex-ante reduction ---
 year_ini      = datetime.now().year + 1   # first year of the simulation horizon (for axis labels only)
 discount_rate = 0.12                      # annual discount rate for investment cost-benefit
-inv = [ 5,  0, 10,  0, 20,  0, 10,  0,  5,  0]   # $MM invested per year
+inv = [ 4,  0,  8,  0,  16,  0,  8,  0, 4,  0]   # $MM invested per year
 rbc = [ 4,  4,  4,  4,  4,  4,  4,  4,  4,  4]  # benefit-to-cost ratio
 hor = [20, 20, 20, 20, 20, 20, 20, 20, 20, 20]  # benefit horizon (years)
 
@@ -291,10 +291,42 @@ print(f'Total {catalogue_length}-year FISCAL uncovered median:'
       f' ${np.round(resp_fiscal * (synthetic_annual_df[total_coverage != 0].sum(axis=1) - total_coverage.sum(axis=1)).median(), 1)} MM')
 
 # =============================================================================
+# 5b. CBA ANALYSIS
+# =============================================================================
+
+from cba.config import get_default_config as get_cba_config
+from cba.engine import run_cba
+from cba.reports import generate_text_report
+
+cba_config = get_cba_config()
+cba_results = run_cba(
+    losses_df=sim_result['synthetic_annual_df'],
+    payout_dfs=drm_result['payout_dfs'],
+    drm_configs=drm_configs,
+    cba_config=cba_config,
+)
+print(generate_text_report(cba_results))
+
+# =============================================================================
 # 6. RISK REDUCTION Mechanism
 # =============================================================================
 
 red = compute_reduction_schedule(inv, rbc, hor, discount_rate)
+
+# --- Plot: DRR Investment per year ---
+fig, ax = plt.subplots(figsize=(8, 5))
+ax.bar(year_labels, inv, color='#1B5E79', label='DRR Investment')
+for x, v in zip(year_labels, inv):
+    label = f'${v:.1f}MM' if v > 0 else '$-'
+    ax.text(x, v, label, ha='center', va='bottom', fontsize=9)
+ax.yaxis.set_major_formatter(
+    plt.FuncFormatter(lambda val, _: f'${val:.1f}MM' if val > 0 else '$-'))
+ax.set_xticks(year_labels)
+ax.set_xticklabels(year_labels)
+ax.set_title('DRR Investment')
+ax.legend()
+plt.tight_layout()
+plt.show()
 
 reduced_result = generate_reduced_catalogue(
     lec_curve, red,
@@ -368,3 +400,41 @@ print(f'Total {catalogue_length}-year FISCAL retention median:'
       f' ${np.round(resp_fiscal * synthetic_annual_red_df[total_coverage_red == 0].sum(axis=1).median(), 1)} MM')
 print(f'Total {catalogue_length}-year FISCAL uncovered median:'
       f' ${np.round(resp_fiscal * (synthetic_annual_red_df[total_coverage_red != 0].sum(axis=1) - total_coverage_red.sum(axis=1)).median(), 1)} MM')
+
+drr_roi = ((synthetic_annual_df-synthetic_annual_red_df).cumsum(axis=1)<np.array(inv).sum()).sum(axis=1).median()
+print(f'\nDRR Investment total: ${np.array(inv).sum():.1f} MM')
+print(f'Median years until DRR investment is "paid back" by reduction in losses: {drr_roi} years (undiscounted)')
+
+# =============================================================================
+# 7. EXPORT STATISTICS TO CSV
+# =============================================================================
+
+def _stats_row(label, annual_df, coverage_df, fiscal_share):
+    loss_med      = np.round(annual_df.sum(axis=1).median(), 1)
+    cov_med       = np.round(coverage_df.sum(axis=1).median(), 1)
+    ret_med       = np.round(annual_df[coverage_df == 0].sum(axis=1).median(), 1)
+    uncov_med     = np.round(
+        (annual_df[coverage_df != 0].sum(axis=1) - coverage_df.sum(axis=1)).median(), 1)
+    f_ret_med     = np.round(fiscal_share * ret_med, 1)
+    f_uncov_med   = np.round(fiscal_share * uncov_med, 1)
+    return {
+        'Scenario': label,
+        f'Total {catalogue_length}-year loss median ($MM)':             loss_med,
+        f'Total {catalogue_length}-year coverage median ($MM)':         cov_med,
+        f'Total {catalogue_length}-year retention median ($MM)':        ret_med,
+        f'Total {catalogue_length}-year uncovered median ($MM)':        uncov_med,
+        f'Total {catalogue_length}-year FISCAL retention median ($MM)': f_ret_med,
+        f'Total {catalogue_length}-year FISCAL uncovered median ($MM)': f_uncov_med,
+    }
+
+stats_rows = [
+    _stats_row(f'{id_estrategia} — Catálogo base',
+               synthetic_annual_df, total_coverage, resp_fiscal),
+    _stats_row(f'{id_estrategia} — Catálogo reducido (ex-ante)',
+               synthetic_annual_red_df, total_coverage_red, resp_fiscal),
+]
+
+stats_df = pd.DataFrame(stats_rows).set_index('Scenario').T
+csv_path = Path(__file__).parent / f'statistics_{id_estrategia}.csv'
+stats_df.to_csv(csv_path, encoding='utf-8-sig')
+print(f'\nStatistics exported to: {csv_path}')
