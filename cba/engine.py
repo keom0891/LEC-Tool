@@ -140,6 +140,10 @@ def _build_instrument_config(drm_cfg: dict, cba_config: LECCBAConfig):
             base.interest_rate = float(drm_cfg['interest_rate'])
         if 'repayment_years' in drm_cfg:
             base.repayment_years = int(drm_cfg['repayment_years'])
+        if 'ddo_threshold' in drm_cfg:
+            base.ddo_threshold = float(drm_cfg['ddo_threshold'])
+        if 'ddo_available' in drm_cfg:
+            base.ddo_available = float(drm_cfg['ddo_available'])
         return base
 
     else:

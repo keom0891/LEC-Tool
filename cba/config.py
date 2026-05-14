@@ -165,6 +165,8 @@ class DDOConfig:
     interest_rate: float = 0.035
     repayment_years: int = 5
     cost_function: str = "primary"
+    ddo_threshold: Optional[float] = None   # loss trigger ($MM)
+    ddo_available: Optional[float] = None   # fixed payout per activation ($MM)
 
 
 # ================================================================

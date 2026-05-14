@@ -22,8 +22,8 @@ def _format_config_summary(results) -> str:
         "=" * 60,
         f"Fiscal responsibility share (resp_fiscal): "
         f"{results.resp_fiscal:.0%}",
-        f"Analysis horizon: {cfg.discount.analysis_horizon} years",
-        f"Simulations: {cfg.discount.num_simulations}",
+        f"Analysis horizon: {results.losses_matrix.shape[1]} years",
+        f"Simulations: {results.losses_matrix.shape[0]}",
         f"Discount rate: {cfg.discount.social_discount_rate:.1%}",
         f"Indirect benefit factor: {cfg.indirect_benefit.factor:.1%}",
         f"OMV lambda: {cfg.omv.lambda_risk_adjustment}",
@@ -70,12 +70,17 @@ def _format_config_summary(results) -> str:
             ]
 
         elif itype == 'ddo':
-            lines += [
-                f"--- {inst_name} (Deferred Drawdown Option — recurrent) ---",
+            block = [f"--- {inst_name} (Deferred Drawdown Option — recurrent) ---"]
+            if inst_cfg.ddo_threshold is not None:
+                block.append(f"  Trigger: ${inst_cfg.ddo_threshold:.0f}M loss")
+            if inst_cfg.ddo_available is not None:
+                block.append(f"  Payout per activation: ${inst_cfg.ddo_available:.0f}M")
+            block += [
                 f"  Interest rate: {inst_cfg.interest_rate:.1%}",
                 f"  Repayment: {inst_cfg.repayment_years} years",
                 "",
             ]
+            lines += block
 
     lines.append("=" * 60)
     return "\n".join(lines)
