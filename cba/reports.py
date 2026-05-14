@@ -8,11 +8,77 @@ Aligned to BID instruments (CCRIF, PPO, CCF) with DRR comparative table.
 import numpy as np
 from typing import Optional
 
-INSTRUMENT_LABELS = {
-    "insurance": "CCRIF",
-    "ppo": "PPO",
-    "ccf": "CCF",
-}
+
+def _format_config_summary(results) -> str:
+    """
+    Build the configuration summary from the resolved per-instrument configs
+    stored in results, so it reflects actual drm_configs parameters and
+    all instrument instances (including multiple DDOs).
+    """
+    cfg = results.config
+    lines = [
+        "=" * 60,
+        "LEC-CBA Configuration Summary",
+        "=" * 60,
+        f"Fiscal responsibility share (resp_fiscal): "
+        f"{results.resp_fiscal:.0%}",
+        f"Analysis horizon: {cfg.discount.analysis_horizon} years",
+        f"Simulations: {cfg.discount.num_simulations}",
+        f"Discount rate: {cfg.discount.social_discount_rate:.1%}",
+        f"Indirect benefit factor: {cfg.indirect_benefit.factor:.1%}",
+        f"OMV lambda: {cfg.omv.lambda_risk_adjustment}",
+        "",
+    ]
+
+    for inst_name, inst_cfg in results.resolved_instrument_configs.items():
+        itype = results.instrument_types.get(inst_name, '')
+
+        if itype == 'insurance':
+            lines += [
+                f"--- {inst_name} (Parametric Insurance) ---",
+                f"  Layer: ${inst_cfg.attachment_point:.0f}M"
+                f" - ${inst_cfg.exhaustion_point:.0f}M",
+                f"  Ceding: {inst_cfg.ceding_percentage:.1%}",
+                f"  ROL: {inst_cfg.rate_on_line:.1%}",
+                f"  Annual premium: ${inst_cfg.premium:.2f}M",
+                "",
+            ]
+
+        elif itype == 'ppo':
+            lines += [
+                f"--- {inst_name} (Contingent Credit — single activation) ---",
+                f"  Max available: ${inst_cfg.credit_line:.0f}M",
+                f"  Commitment fee: {inst_cfg.commitment_fee_rate:.2%}",
+                f"  Interest rate: {inst_cfg.interest_rate:.1%}",
+                f"  Repayment: {inst_cfg.repayment_years} years",
+                f"  Front-end fee: {inst_cfg.front_end_fee_rate:.2%}",
+                "",
+            ]
+
+        elif itype == 'ccf':
+            lines += [
+                f"--- {inst_name} (Contingent Credit — recurrent) ---",
+                f"  Total facility: ${inst_cfg.ccf_maximum:.0f}M (cumulative cap)",
+                f"  Per person: ${inst_cfg.ccf_person:,.0f}",
+                f"  Pop exposed: {inst_cfg.pop_exposed/1e6:.2f}M",
+                f"  Drawdown fee: {inst_cfg.drawdown_fee_rate:.2%}",
+                f"  Interest rate: {inst_cfg.interest_rate:.1%}",
+                f"  Grace period: {inst_cfg.grace_period_years} years",
+                f"  Repayment: {inst_cfg.repayment_years} years",
+                f"  Payout function: {inst_cfg.payout_function}",
+                "",
+            ]
+
+        elif itype == 'ddo':
+            lines += [
+                f"--- {inst_name} (Deferred Drawdown Option — recurrent) ---",
+                f"  Interest rate: {inst_cfg.interest_rate:.1%}",
+                f"  Repayment: {inst_cfg.repayment_years} years",
+                "",
+            ]
+
+    lines.append("=" * 60)
+    return "\n".join(lines)
 
 
 def generate_text_report(results) -> str:
@@ -22,7 +88,7 @@ def generate_text_report(results) -> str:
     lines.append("LEC-CBA ANALYSIS REPORT")
     lines.append("=" * 70)
     lines.append("")
-    lines.append(results.config.summary())
+    lines.append(_format_config_summary(results))
     lines.append("")
 
     # --- Core indicators ---
@@ -45,10 +111,9 @@ def generate_text_report(results) -> str:
     lines.append("")
     lines.append("  B/C Ratio by Instrument:")
     for name, ratios in c.bc_ratios_by_instrument.items():
-        label = INSTRUMENT_LABELS.get(name, name)
         finite = ratios[np.isfinite(ratios)]
         if len(finite) > 0:
-            lines.append(f"    {label:10s}  E[B/C]={np.mean(finite):.3f}  "
+            lines.append(f"    {name:16s}  E[B/C]={np.mean(finite):.3f}  "
                          f"P(B/C>1)={np.mean(ratios > 1.0):.1%}")
     lines.append("")
 
@@ -61,17 +126,16 @@ def generate_text_report(results) -> str:
     lines.append(f"  Aggregate Money Value:    {e.aggregate_money_value:.3f}")
     lines.append(f"  Aggregate OMV:            {e.aggregate_omv:.3f}")
     lines.append("")
-    lines.append(f"  {'Instrument':10s}  {'CM':>8s}  {'MV':>8s}  {'OMV':>8s}")
-    lines.append(f"  {'-'*10}  {'-'*8}  {'-'*8}  {'-'*8}")
+    lines.append(f"  {'Instrument':16s}  {'CM':>8s}  {'MV':>8s}  {'OMV':>8s}")
+    lines.append(f"  {'-'*16}  {'-'*8}  {'-'*8}  {'-'*8}")
     for name in e.cost_multiples:
-        label = INSTRUMENT_LABELS.get(name, name)
         cm = e.cost_multiples[name]
         mv = e.money_values[name]
         omv = e.omv_values.get(name, float('inf'))
         cm_s = f"{cm:.3f}" if np.isfinite(cm) else "N/A"
         mv_s = f"{mv:.3f}" if np.isfinite(mv) else "N/A"
         omv_s = f"{omv:.3f}" if np.isfinite(omv) else "N/A"
-        lines.append(f"  {label:10s}  {cm_s:>8s}  {mv_s:>8s}  {omv_s:>8s}")
+        lines.append(f"  {name:16s}  {cm_s:>8s}  {mv_s:>8s}  {omv_s:>8s}")
     lines.append("")
 
     # --- DRR Analysis ---
@@ -166,7 +230,7 @@ def generate_plots(results, output_dir: str = "."):
         if len(finite) > 0:
             capped = np.clip(finite, 0, np.percentile(finite, 95))
             inst_data.append(capped)
-            inst_labels.append(INSTRUMENT_LABELS.get(name, name))
+            inst_labels.append(name)
     if inst_data:
         bp = ax.boxplot(inst_data, labels=inst_labels, patch_artist=True)
         for patch, color in zip(bp['boxes'], colors):
@@ -178,7 +242,7 @@ def generate_plots(results, output_dir: str = "."):
     # 4. CM + OMV by Instrument
     ax = axes[1, 0]
     names = list(results.efficiency.cost_multiples.keys())
-    labels = [INSTRUMENT_LABELS.get(n, n) for n in names]
+    labels = names
     cms = [min(results.efficiency.cost_multiples[n], 10) for n in names]
     omvs = [min(results.efficiency.omv_values.get(n, 0), 10) for n in names]
     x = np.arange(len(names))

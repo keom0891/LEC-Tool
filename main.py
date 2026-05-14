@@ -50,7 +50,7 @@ curva_hibrida     = True   # blend empirical LEC with probabilistic tail
 
 # --- Simulation ---
 catalogue_length  = 10     # years per synthetic catalogue
-simulation_number = 1000   # number of independent catalogues (1–1000)
+simulation_number = 900   # number of independent catalogues (1–1000)
 random_seed       = 99     # for reproducibility, set to None for random number generation
 
 # --- Visualization ---
@@ -313,6 +313,7 @@ cba_results = run_cba(
     payout_dfs=drm_result['payout_dfs'],
     drm_configs=drm_configs,
     cba_config=cba_config,
+    resp_fiscal=resp_fiscal,
 )
 print(generate_text_report(cba_results))
 cba_report_path = OUTPUT_DIR / f'cba_report_{id_estrategia}.txt'

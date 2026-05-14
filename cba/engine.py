@@ -44,6 +44,13 @@ class CBAResults:
     core: CoreIndicators = None
     efficiency: EfficiencyIndicators = None
 
+    # Resolved per-instrument configs (built once from drm_configs + cba_config)
+    resolved_instrument_configs: Dict[str, object] = field(default_factory=dict)
+    # maps instrument name → type string ('insurance', 'ppo', 'ccf', 'ddo')
+    instrument_types: Dict[str, str] = field(default_factory=dict)
+    # fiscal responsibility share passed from main.py (for reporting only)
+    resp_fiscal: float = 1.0
+
     # Optional fields (not computed by run_cba, available for downstream use)
     drr: Optional[object] = None
     sensitivity: Optional[object] = None
@@ -144,6 +151,7 @@ def run_cba(
     payout_dfs: list,
     drm_configs: list,
     cba_config: LECCBAConfig,
+    resp_fiscal: float = 1.0,
 ) -> CBAResults:
     """
     Run cost-benefit analysis on outputs from risk_management.apply_strategy.
@@ -160,6 +168,8 @@ def run_cba(
         Same list passed to apply_strategy. Each dict has a 'type' key.
     cba_config : LECCBAConfig
         CBA configuration parameters.
+    resp_fiscal : float, default 1.0
+        Fiscal responsibility share from main.py, stored for reporting only.
 
     Returns
     -------
@@ -174,6 +184,7 @@ def run_cba(
 
     results = CBAResults(config=cba_config)
     results.losses_matrix = losses_matrix
+    results.resp_fiscal = resp_fiscal
 
     # Initialize output matrices
     results.total_costs_matrix = np.zeros((num_sims, horizon))
@@ -191,6 +202,18 @@ def run_cba(
         results.payouts_by_instrument[name] = np.zeros((num_sims, horizon))
         results.benefits_by_instrument[name] = np.zeros((num_sims, horizon))
 
+    # Build per-instrument configs once (not per simulation)
+    instrument_configs = {}
+    for j, drm_cfg in enumerate(drm_configs):
+        inst_name = instrument_names[j]
+        instrument_configs[inst_name] = _build_instrument_config(drm_cfg, cba_config)
+
+    results.resolved_instrument_configs = instrument_configs
+    results.instrument_types = {
+        instrument_names[j]: drm_cfg['type']
+        for j, drm_cfg in enumerate(drm_configs)
+    }
+
     # --- Per-simulation loop ---
     for s in range(num_sims):
         total_payout_s = np.zeros(horizon)
@@ -201,7 +224,7 @@ def run_cba(
             annual_payouts = payout_dfs[j].iloc[s].values.astype(float)
 
             cost_fn = _get_cost_function(itype)
-            inst_cfg = _build_instrument_config(drm_cfg, cba_config)
+            inst_cfg = instrument_configs[inst_name]
 
             # Compute annual costs
             if itype == 'insurance':
