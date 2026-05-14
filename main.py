@@ -39,6 +39,8 @@ from risk_reduction import compute_reduction_schedule, generate_reduced_catalogu
 # =============================================================================
 
 DATA_DIR = Path(__file__).parent / 'data'
+OUTPUT_DIR = Path(__file__).parent / 'outputs'
+OUTPUT_DIR.mkdir(exist_ok=True)
 
 # --- Global ---
 resp_fiscal       = 0.60   # fiscal responsibility share (0–1)
@@ -56,6 +58,13 @@ catalogo_visualizado = 860  # which catalogue to display in per-catalogue plots 
 
 # --- DRM strategy: Estrategia 1 (CCRIF + PPO + CCF) ---
 # PPO schedule is loaded from file; placeholder here, overwritten below.
+# Cost parameters can be added to any instrument dict and will override the
+# cba_config defaults for that specific instrument. Examples:
+#   insurance: add 'rate_on_line' (float)
+#   ppo:       add 'commitment_fee_rate', 'interest_rate', 'repayment_years'
+#   ccf:       add 'drawdown_fee_rate', 'interest_rate', 'grace_period_years'
+#   ddo:       add 'interest_rate', 'repayment_years'
+# If absent, cba/config.py defaults are used.
 drm_configs = [
     {
         'name': 'CCRIF',
@@ -306,6 +315,9 @@ cba_results = run_cba(
     cba_config=cba_config,
 )
 print(generate_text_report(cba_results))
+cba_report_path = OUTPUT_DIR / f'cba_report_{id_estrategia}.txt'
+cba_report_path.write_text(generate_text_report(cba_results), encoding='utf-8')
+print(f'CBA report saved to: {cba_report_path}')
 
 # =============================================================================
 # 6. RISK REDUCTION Mechanism
@@ -435,6 +447,6 @@ stats_rows = [
 ]
 
 stats_df = pd.DataFrame(stats_rows).set_index('Scenario').T
-csv_path = Path(__file__).parent / f'statistics_{id_estrategia}.csv'
+csv_path = OUTPUT_DIR / f'statistics_{id_estrategia}.csv'
 stats_df.to_csv(csv_path, encoding='utf-8-sig')
 print(f'\nStatistics exported to: {csv_path}')

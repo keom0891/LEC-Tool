@@ -221,3 +221,7 @@ Thumbs.db
 # Carpetas de entornos virtuales
 venv/
 env/
+
+# Generated outputs (plots, reports, statistics)
+outputs/
+!outputs/.gitkeep

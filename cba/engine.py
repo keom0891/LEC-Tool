@@ -65,15 +65,78 @@ def _get_cost_function(instrument_type: str):
     return mapping[instrument_type]
 
 
-def _get_instrument_config(instrument_type: str, cba_config: LECCBAConfig):
-    """Map instrument type string to its config object."""
-    mapping = {
-        'insurance': cba_config.insurance,
-        'ppo': cba_config.ppo,
-        'ccf': cba_config.ccf,
-        'ddo': cba_config.ddo,
-    }
-    return mapping[instrument_type]
+def _build_instrument_config(drm_cfg: dict, cba_config: LECCBAConfig):
+    """
+    Build a typed cost-config object for one instrument, merging
+    per-instrument overrides from drm_cfg with cba_config defaults.
+
+    Cost parameters recognised per instrument type:
+
+    'insurance': rate_on_line, attachment_point, exhaustion_point,
+                 ceding_percentage, premium
+    'ppo':       commitment_fee_rate, interest_rate, repayment_years,
+                 front_end_fee_rate, credit_line (auto from ppo_schedule if absent)
+    'ccf':       drawdown_fee_rate, interest_rate, repayment_years,
+                 grace_period_years
+    'ddo':       interest_rate, repayment_years
+
+    All unrecognised keys in drm_cfg are silently ignored.
+    """
+    from cba.config import InsuranceConfig, PPOConfig, CCFConfig, DDOConfig
+    import copy
+
+    itype = drm_cfg['type']
+
+    if itype == 'insurance':
+        base = copy.copy(cba_config.insurance)
+        # Override payout params (must match what risk_management uses)
+        for attr in ('attachment_point', 'exhaustion_point', 'ceding_percentage'):
+            if attr in drm_cfg:
+                setattr(base, attr, float(drm_cfg[attr]))
+        # Override cost params
+        for attr in ('rate_on_line', 'premium'):
+            if attr in drm_cfg:
+                setattr(base, attr, float(drm_cfg[attr]))
+        # Recompute premium if not explicitly set
+        if 'premium' not in drm_cfg:
+            coverage = (base.exhaustion_point - base.attachment_point) * base.ceding_percentage
+            base.premium = base.rate_on_line * coverage
+        return base
+
+    elif itype == 'ppo':
+        base = copy.copy(cba_config.ppo)
+        for attr in ('commitment_fee_rate', 'interest_rate', 'front_end_fee_rate'):
+            if attr in drm_cfg:
+                setattr(base, attr, float(drm_cfg[attr]))
+        if 'repayment_years' in drm_cfg:
+            base.repayment_years = int(drm_cfg['repayment_years'])
+        # credit_line: explicit override or derive from ppo_schedule
+        if 'credit_line' in drm_cfg:
+            base.credit_line = float(drm_cfg['credit_line'])
+        elif 'ppo_schedule' in drm_cfg and drm_cfg['ppo_schedule'] is not None:
+            base.credit_line = float(max(drm_cfg['ppo_schedule']))
+        return base
+
+    elif itype == 'ccf':
+        base = copy.copy(cba_config.ccf)
+        for attr in ('drawdown_fee_rate', 'interest_rate'):
+            if attr in drm_cfg:
+                setattr(base, attr, float(drm_cfg[attr]))
+        for attr in ('repayment_years', 'grace_period_years'):
+            if attr in drm_cfg:
+                setattr(base, attr, int(drm_cfg[attr]))
+        return base
+
+    elif itype == 'ddo':
+        base = copy.copy(cba_config.ddo)
+        if 'interest_rate' in drm_cfg:
+            base.interest_rate = float(drm_cfg['interest_rate'])
+        if 'repayment_years' in drm_cfg:
+            base.repayment_years = int(drm_cfg['repayment_years'])
+        return base
+
+    else:
+        raise ValueError(f"Unknown instrument type '{itype}'")
 
 
 def run_cba(
@@ -102,9 +165,12 @@ def run_cba(
     -------
     CBAResults
     """
+    # TODO: clarify whether losses_df contains total economic losses or fiscal losses.
+    # If total losses, multiply by cba_config.government_exposure.factor here:
+    #   losses_matrix = losses_df.values.astype(float) * cba_config.government_exposure.factor
+    # Currently using losses as-is pending team confirmation.
     losses_matrix = losses_df.values.astype(float)
     num_sims, horizon = losses_matrix.shape
-    n_instruments = len(drm_configs)
 
     results = CBAResults(config=cba_config)
     results.losses_matrix = losses_matrix
@@ -115,14 +181,15 @@ def run_cba(
     results.total_payouts_matrix = np.zeros((num_sims, horizon))
     results.unpaid_losses_matrix = np.zeros((num_sims, horizon))
 
-    # Initialize per-instrument matrices using unique instrument types.
-    # Multiple instruments of the same type (e.g. two DDOs) are accumulated
-    # under the same key so their combined costs/payouts are reported together.
-    instrument_types = list(dict.fromkeys(cfg['type'] for cfg in drm_configs))
-    for itype in instrument_types:
-        results.costs_by_instrument[itype] = np.zeros((num_sims, horizon))
-        results.payouts_by_instrument[itype] = np.zeros((num_sims, horizon))
-        results.benefits_by_instrument[itype] = np.zeros((num_sims, horizon))
+    # Each instrument gets its own key (name), so two DDOs with different names
+    # are tracked separately rather than collapsed into one type bucket.
+    instrument_names = [
+        cfg.get('name', f"{cfg['type']}_{j}") for j, cfg in enumerate(drm_configs)
+    ]
+    for name in instrument_names:
+        results.costs_by_instrument[name] = np.zeros((num_sims, horizon))
+        results.payouts_by_instrument[name] = np.zeros((num_sims, horizon))
+        results.benefits_by_instrument[name] = np.zeros((num_sims, horizon))
 
     # --- Per-simulation loop ---
     for s in range(num_sims):
@@ -130,11 +197,11 @@ def run_cba(
 
         for j, drm_cfg in enumerate(drm_configs):
             itype = drm_cfg['type']
+            inst_name = instrument_names[j]
             annual_payouts = payout_dfs[j].iloc[s].values.astype(float)
 
-            # Get cost function and instrument config
             cost_fn = _get_cost_function(itype)
-            inst_cfg = _get_instrument_config(itype, cba_config)
+            inst_cfg = _build_instrument_config(drm_cfg, cba_config)
 
             # Compute annual costs
             if itype == 'insurance':
@@ -145,10 +212,10 @@ def run_cba(
             # Benefits = payouts × (1 + indirect_factor)
             annual_benefits = annual_payouts * (1.0 + cba_config.indirect_benefit.factor)
 
-            # Accumulate with += so multiple instruments of the same type combine
-            results.costs_by_instrument[itype][s] += annual_costs
-            results.payouts_by_instrument[itype][s] += annual_payouts
-            results.benefits_by_instrument[itype][s] += annual_benefits
+            # Each instrument has its own key — no += accumulation needed here
+            results.costs_by_instrument[inst_name][s] = annual_costs
+            results.payouts_by_instrument[inst_name][s] = annual_payouts
+            results.benefits_by_instrument[inst_name][s] = annual_benefits
 
             results.total_costs_matrix[s] += annual_costs
             results.total_benefits_matrix[s] += annual_benefits
@@ -168,15 +235,15 @@ def run_cba(
     benefits_by_inst_pv = {}
     costs_by_inst_pv = {}
     payouts_by_inst_pv = {}
-    for itype in instrument_types:
-        benefits_by_inst_pv[itype] = present_value_matrix(
-            results.benefits_by_instrument[itype], cba_config.discount
+    for name in instrument_names:
+        benefits_by_inst_pv[name] = present_value_matrix(
+            results.benefits_by_instrument[name], cba_config.discount
         )
-        costs_by_inst_pv[itype] = present_value_matrix(
-            results.costs_by_instrument[itype], cba_config.discount
+        costs_by_inst_pv[name] = present_value_matrix(
+            results.costs_by_instrument[name], cba_config.discount
         )
-        payouts_by_inst_pv[itype] = present_value_matrix(
-            results.payouts_by_instrument[itype], cba_config.discount
+        payouts_by_inst_pv[name] = present_value_matrix(
+            results.payouts_by_instrument[name], cba_config.discount
         )
 
     # --- Indicators ---
