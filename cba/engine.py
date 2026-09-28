@@ -58,6 +58,10 @@ class CBAResults:
     sensitivity: Optional[object] = None
     # CNC (Comparative Net Cost) — populated only if cba_config.cnc.enabled
     cnc: Optional[object] = None
+    # v8 — one entry per insurance instrument: economic and fiscal B/C,
+    # implied pricing multiple and protection indicators (see
+    # _insurance_analysis). Populated by run_cba.
+    insurance_analysis: Dict[str, dict] = field(default_factory=dict)
 
 
 def _get_cost_function(instrument_type: str):
@@ -127,6 +131,19 @@ def _build_instrument_config(drm_cfg: dict, cba_config: LECCBAConfig):
         if 'premium' not in drm_cfg:
             coverage = (base.exhaustion_point - base.attachment_point) * base.ceding_percentage
             base.premium = base.rate_on_line * coverage
+        # v8: donor discount, pricing method and payout rule (set by
+        # insurance_layer.resolve_instruments; informational for the costs).
+        base.donor_discount = float(drm_cfg.get('donor_discount', 0.0))
+        base.pricing_method = str(drm_cfg.get('pricing', 'fixed_rol'))
+        if 'payout_mode' in drm_cfg:
+            base.payout_mode = str(drm_cfg['payout_mode'])
+        if 'one_payout_per_year' in drm_cfg:
+            base.one_payout_per_year = bool(drm_cfg['one_payout_per_year'])
+        if not 0.0 <= base.donor_discount <= base.premium:
+            raise ValueError(
+                f"Insurance '{drm_cfg.get('name', 'insurance')}': donor_discount "
+                f"({base.donor_discount}) must be between 0 and the premium ({base.premium})."
+            )
         return base
 
     elif itype == 'ppo':
@@ -136,6 +153,14 @@ def _build_instrument_config(drm_cfg: dict, cba_config: LECCBAConfig):
                 setattr(base, attr, float(drm_cfg[attr]))
         if 'repayment_years' in drm_cfg:
             base.repayment_years = int(drm_cfg['repayment_years'])
+        if 'grace_period_years' in drm_cfg:
+            base.grace_period_years = float(drm_cfg['grace_period_years'])
+        if base.grace_period_years >= base.repayment_years:
+            raise ValueError(
+                f"PPO '{drm_cfg.get('name', 'ppo')}': grace_period_years "
+                f"({base.grace_period_years}) must be strictly less than "
+                f"repayment_years ({base.repayment_years})."
+            )
         # credit_line: explicit override or derive from ppo_schedule
         if 'credit_line' in drm_cfg:
             base.credit_line = float(drm_cfg['credit_line'])
@@ -173,6 +198,14 @@ def _build_instrument_config(drm_cfg: dict, cba_config: LECCBAConfig):
             base.ddo_threshold = float(drm_cfg['ddo_threshold'])
         if 'ddo_available' in drm_cfg:
             base.ddo_available = float(drm_cfg['ddo_available'])
+        if 'grace_period_years' in drm_cfg:
+            base.grace_period_years = float(drm_cfg['grace_period_years'])
+        if base.grace_period_years >= base.repayment_years:
+            raise ValueError(
+                f"DDO '{drm_cfg.get('name', 'ddo')}': grace_period_years "
+                f"({base.grace_period_years}) must be strictly less than "
+                f"repayment_years ({base.repayment_years})."
+            )
         return base
 
     else:
@@ -339,6 +372,13 @@ def run_cba(
         lambda_risk=cba_config.omv.lambda_risk_adjustment,
     )
 
+    # --- v8: insurance analysis (economic / fiscal B/C, pricing, protection) ---
+    for name in instrument_names:
+        if results.instrument_types.get(name) == 'insurance':
+            results.insurance_analysis[name] = _insurance_analysis(
+                name, results, cba_config, costs_by_inst_pv[name]
+            )
+
     # --- CNC (Comparative Net Cost) — optional, modular ---
     # Runs only if the cnc config is present and enabled. Strategy A cost is the
     # total ex-ante instruments cost (costs_pv); Strategy B is ex-post commercial
@@ -359,3 +399,75 @@ def run_cba(
             results.cnc = None
 
     return results
+
+
+def _insurance_analysis(name, results, cba_config, costs_pv_inst) -> dict:
+    """
+    Indicators reported for an insurance instrument (v8).
+
+    economic B/C   benefits over the GROSS premium (the true cost of the cover).
+    fiscal B/C     benefits over the premium the government pays, net of the
+                   donor discount. Differs from the economic ratio only when
+                   a donor pays part of the premium.
+    multiple       gross premium per unit of expected annual payout. A price
+                   below 1.0 would sell cover below its expected loss; market
+                   prices for catastrophe layers sit well above 1.
+    protection     how much the policy lowers the unpaid loss in bad outcomes:
+                   the 95th and 99th percentiles of the unpaid loss (present
+                   value over the horizon) with and without this policy.
+
+    For insurance, a benefit-cost ratio below 1 is the normal outcome of a
+    fairly priced policy: the premium exceeds the expected payout by the
+    insurer's cost of holding capital. The policy is bought for protection in
+    the bad years, which the protection indicators measure.
+    """
+    from cba.discounting import present_value_matrix
+
+    cfg = results.resolved_instrument_configs[name]
+    payouts = results.payouts_by_instrument[name]
+    gross = float(cfg.premium)
+    net = float(cfg.premium - getattr(cfg, 'donor_discount', 0.0))
+
+    econ = results.core.bc_ratios_by_instrument[name]
+    fiscal = econ * (gross / net) if net > 0 else np.full_like(econ, np.inf)
+
+    def _mean_finite(x):
+        f = x[np.isfinite(x)]
+        return float(np.mean(f)) if f.size else float('inf')
+
+    expected_payout = float(np.mean(payouts))           # per year
+    multiple = gross / expected_payout if expected_payout > 0 else float('inf')
+
+    others = results.total_payouts_matrix - payouts
+    unpaid_with = present_value_matrix(results.unpaid_losses_matrix, cba_config.discount)
+    unpaid_without = present_value_matrix(
+        np.maximum(0.0, results.losses_matrix - others), cba_config.discount
+    )
+    paying_years = payouts[payouts > 0]
+    paid_mask = payouts > 0
+    with np.errstate(divide='ignore', invalid='ignore'):
+        share = payouts[paid_mask] / results.losses_matrix[paid_mask]
+    share = share[np.isfinite(share)]
+
+    return {
+        'gross_premium': gross,
+        'net_premium': net,
+        'donor_discount': gross - net,
+        'pricing_method': getattr(cfg, 'pricing_method', 'fixed_rol'),
+        'payout_mode': getattr(cfg, 'payout_mode', 'proportional'),
+        'one_payout_per_year': getattr(cfg, 'one_payout_per_year', False),
+        'coverage_limit': (cfg.exhaustion_point - cfg.attachment_point) * cfg.ceding_percentage,
+        'expected_annual_payout': expected_payout,
+        'implied_multiple': multiple,
+        'bc_economic': _mean_finite(econ),
+        'bc_fiscal': _mean_finite(fiscal),
+        'prob_bc_economic_gt_1': float(np.mean(econ > 1.0)),
+        'prob_pays_in_horizon': float(np.mean((payouts > 0).any(axis=1))),
+        'mean_payout_when_paid': float(np.mean(paying_years)) if paying_years.size else 0.0,
+        'mean_share_of_loss_when_paid': float(np.mean(share)) if share.size else 0.0,
+        'unpaid_p95_without': float(np.percentile(unpaid_without, 95)),
+        'unpaid_p95_with': float(np.percentile(unpaid_with, 95)),
+        'unpaid_p99_without': float(np.percentile(unpaid_without, 99)),
+        'unpaid_p99_with': float(np.percentile(unpaid_with, 99)),
+        'premium_pv_gross': float(np.mean(costs_pv_inst)),
+    }

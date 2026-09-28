@@ -12,6 +12,10 @@ compute_aal                      Average Annual Loss from a LEC curve.
 
 import numpy as np
 
+# NumPy 2.0 renamed ``np.trapz`` to ``np.trapezoid``; the new name does not
+# exist in NumPy 1.x. Resolved once so the module runs under both.
+_trapezoid = getattr(np, "trapezoid", None) or np.trapz
+
 
 def aggregate_event_values_by_year(times, values, catalogue_length):
     """
@@ -87,4 +91,4 @@ def compute_aal(loss, rate):
     """
     loss = np.asarray(loss, dtype=float)
     rate = np.asarray(rate, dtype=float)
-    return (abs(np.trapezoid(rate, loss)) + abs(np.trapezoid(loss, rate))) / 2
+    return (abs(_trapezoid(rate, loss)) + abs(_trapezoid(loss, rate))) / 2

@@ -254,7 +254,7 @@ def ppo_annual_costs(
                 loan_rate=r,
                 social_rate=social_rate,
                 term_years=cfg.repayment_years,
-                grace_years=0,
+                grace_years=getattr(cfg, "grace_period_years", 0.0),
             )
             outstanding_for_fee += annual_payouts[t]
 
@@ -430,7 +430,7 @@ def ddo_annual_costs(
                 loan_rate=cfg.loan_interest_rate,
                 social_rate=social_rate,
                 term_years=cfg.repayment_years,
-                grace_years=0,
+                grace_years=getattr(cfg, "grace_period_years", 0.0),
             )
         annual_costs[t] = cost
 
@@ -470,3 +470,78 @@ def _ddo_annual_costs_legacy(cfg: DDOConfig, annual_payouts: np.ndarray) -> np.n
         annual_costs[t] = cost
 
     return annual_costs
+
+
+def theoretical_credit_bc(
+    social_rate: float,
+    loan_rate: float,
+    term_years: int,
+    grace_years: float = 0.0,
+    indirect_benefit_factor: float = 0.10,
+    extra_fee_rate: float = 0.0,
+) -> float:
+    """
+    Closed-form benefit-cost ratio of a concessional loan.
+
+    For a credit instrument the benefit is the disbursed amount (grossed up by
+    the indirect benefit factor) and the cost is the present value of repaying
+    that same amount. The disbursement cancels, so the ratio does not depend on
+    the loss catalogue, on which events occurred, or on how large they were:
+
+        B/C = (1 + f_B) / (phi + extra_fee_rate)
+
+    where phi is the present value of full debt service per unit disbursed,
+    as computed by ``loan_pv_at_disbursement``.
+
+    Two consequences follow. First, the benefit-cost ratio of a credit
+    instrument is bounded near unity: a loan is close to a zero-NPV operation
+    and the only margin comes from the concessional spread between the social
+    discount rate and the contractual rate, plus the grace period. It can
+    never reach the values a risk-transfer instrument can reach, and comparing
+    the two on this indicator alone is misleading. Second, the ratio is
+    identical in every simulation, so its distribution is degenerate and any
+    reported probability is an algebraic identity rather than a probability.
+
+    The function is intended for two uses: as an internal consistency check
+    against the simulated ratio, and as a sensitivity tool that lets the
+    analyst see the effect of renegotiating the term, the rate or the grace
+    period without re-running the simulation.
+
+    Note that the ratio is exact only for instruments whose entire cost scales
+    with the disbursement. The PPO also pays a commitment fee on its undrawn
+    balance and a front-end fee, neither of which scales with the amount drawn,
+    so its simulated ratio is lower than this closed form and does vary across
+    simulations.
+
+    Parameters
+    ----------
+    social_rate : float
+        Social discount rate.
+    loan_rate : float
+        Contractual interest rate on the loan.
+    term_years : int
+        Total repayment term, including grace.
+    grace_years : float
+        Interest-only grace years.
+    indirect_benefit_factor : float
+        Indirect benefit factor f_B applied to payouts.
+    extra_fee_rate : float
+        Fees proportional to the disbursement, such as the CCF drawdown fee.
+
+    Returns
+    -------
+    float
+        Benefit-cost ratio, or ``inf`` when the present value of the cost is
+        zero or negative.
+    """
+    phi = loan_pv_at_disbursement(
+        principal=1.0,
+        loan_rate=loan_rate,
+        social_rate=social_rate,
+        term_years=term_years,
+        grace_years=grace_years,
+    ) + extra_fee_rate
+
+    if phi <= 0:
+        return float("inf")
+    return (1.0 + indirect_benefit_factor) / phi

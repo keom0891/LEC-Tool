@@ -28,6 +28,10 @@ import pandas as pd
 from simulation import build_inv_cdf
 from utils import compute_aal
 
+# NumPy 2.0 renamed ``np.trapz`` to ``np.trapezoid``. Resolved once so the
+# module runs under both NumPy 1.x and 2.x (see utils.py).
+_trapezoid = getattr(np, "trapezoid", None) or np.trapz
+
 
 # ---------------------------------------------------------------------------
 # Investment-to-reduction schedule
@@ -181,11 +185,11 @@ def calibrate_LEC_AAL(Ct, L, lam, L_cut=None, tol=1e-6, max_iter=80):
     # Proxy for AAL reduction (faster than building Lr on every bisection step)
     def _aal_proxy(a):
         mod_lam = lam * (1.0 - dLred(a))
-        return (abs(np.trapezoid(mod_lam, L)) + abs(np.trapezoid(L, mod_lam))) / 2
+        return (abs(_trapezoid(mod_lam, L)) + abs(_trapezoid(L, mod_lam))) / 2
 
     C_max = (
-        abs(np.trapezoid(lam * (L <= L_cut), L))
-        + abs(np.trapezoid(L, lam * (L <= L_cut)))
+        abs(_trapezoid(lam * (L <= L_cut), L))
+        + abs(_trapezoid(L, lam * (L <= L_cut)))
     ) / 2
 
     if not 0.0 <= Ct <= C_max + 1e-12:

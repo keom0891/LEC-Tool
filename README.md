@@ -2,13 +2,22 @@
 
 La herramienta **LEC Tool** consiste en una plataforma desarrollada por el **Banco Interamericano de Desarrollo** con el propósito de derivar curvas de excedencia de pérdidas (LEC) a partir de registros históricos y resultados de análisis probabilistas de desastres. Esta plataforma está diseñada para estimar la tasa de excedencia anual asociada a valores específicos de pérdidas económicas. La curva LEC resultante se utiliza posteriormente en análisis de riesgo y en la toma de decisiones para la gestión de desastres, particularmente para la selección de estrategias de transferencia y/o reducción de riesgo, y para su evaluación costo-beneficio.
 
-![version](https://img.shields.io/badge/version-3.0.0-blue)
+![version](https://img.shields.io/badge/version-3.1.0-blue)
 
 ---
 
 # ✨ Descripción
 
 El motor de cálculo del LEC Tool está implementado en un conjunto de módulos Python desarrollados por el equipo de Gestión de Riesgos de Desastres del Banco Interamericano de Desarrollo. La versión 3 separa completamente los **insumos del usuario** (archivo `config.toml`) del código de cálculo, y agrupa todos los resultados de una corrida en una carpeta de salida identificada por el usuario.
+
+## Novedades de la versión 3.1 (módulo CBA v8)
+
+- **Umbrales por período de retorno**: la capa del seguro (y, opcionalmente, los umbrales del DDO y del PPO) se puede definir en años (`attachment_rp`, `exhaustion_rp`) en lugar de dólares. Se convierte con la curva del país que se corre, así que la misma estrategia sirve para cualquier país de `Country databases`.
+- **Límite de cobertura en dólares**: el seguro se dimensiona con `coverage_limit`; la cesión se calcula.
+- **Precio de la capa** (`[insurance_pricing]`): regla por tramos (`rol_rule`, por defecto), curva de reaseguro comercial (`market_curve`), cotización real del país (`gross_premium`) o ROL fijo (`fixed_rol`, comportamiento anterior).
+- **Pago del seguro**: proporcional, un pago por año y pago mínimo igual a la prima bruta, como en las pólizas soberanas paramétricas.
+- **Reporte del seguro**: capa en años y en dólares, fuente del precio, múltiplo implícito, B/C económico y fiscal (con descuento del donante) e indicadores de protección.
+- Integra los cambios de la entrega v7 del módulo CBA (gracia en PPO y DDO, disparo propio del PPO, compatibilidad NumPy 1.x/2.x). Detalle en `docs/v8_insurance_layer.md`.
 
 ## Novedades de la versión 3
 
@@ -30,6 +39,7 @@ El motor de cálculo del LEC Tool está implementado en un conjunto de módulos 
 | `lec_core.py` | Cálculo de la curva LEC empírica, intervalos de confianza por bootstrap, y curva híbrida |
 | `hybrid_lec.py` | Construcción de curva híbrida mediante blending log-log entre curva empírica y cola probabilística |
 | `simulation.py` | Generación de catálogos sintéticos de pérdidas (Poisson + muestreo inverso) con Common Random Numbers |
+| `insurance_layer.py` | Ubica los umbrales en la curva del país (período de retorno → $MM) y pone precio a la capa del seguro |
 | `risk_management.py` | Mecanismos de cobertura financiera: seguro paramétrico, PPO, CCF, DDO |
 | `risk_reduction.py` | Reducción del riesgo ex-ante: calibración de desplazamiento de la curva LEC y catálogo reducido |
 | `plots.py` | Generación de todas las figuras |
@@ -49,6 +59,7 @@ El motor de cálculo del LEC Tool está implementado en un conjunto de módulos 
 ├── lec_core.py
 ├── hybrid_lec.py
 ├── simulation.py
+├── insurance_layer.py
 ├── risk_management.py
 ├── risk_reduction.py
 ├── plots.py
@@ -112,11 +123,12 @@ El flujo completo es:
 
 1. Carga del catálogo histórico de pérdidas (y de la cola probabilística y el calendario PPO si aplican)
 2. Curva LEC empírica con intervalos de confianza; curva híbrida si `lec.hybrid_curve = true`
-3. Generación de catálogos sintéticos
-4. Evaluación de la estrategia financiera sobre el catálogo base
-5. Reducción del riesgo ex-ante y reevaluación de la estrategia sobre el catálogo reducido (si `risk_reduction.enabled = true`)
-6. Análisis costo-beneficio (si `cba.enabled = true`), incluida la comparación DRR-CBA cuando la DRR está activa
-7. Escritura de figuras, reporte principal, reporte CBA y estadísticas
+3. Ubicación de los umbrales en la curva del país y precio del seguro
+4. Generación de catálogos sintéticos
+5. Evaluación de la estrategia financiera sobre el catálogo base
+6. Reducción del riesgo ex-ante y reevaluación de la estrategia sobre el catálogo reducido (si `risk_reduction.enabled = true`)
+7. Análisis costo-beneficio (si `cba.enabled = true`), incluida la comparación DRR-CBA cuando la DRR está activa
+8. Escritura de figuras, reporte principal, reporte CBA y estadísticas
 
 Por defecto las figuras solo se guardan; con `run.show_figures = true` también se abren en pantalla.
 

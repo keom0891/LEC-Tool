@@ -20,6 +20,8 @@ Pipeline
 --------
 1. load_inputs         read the CSV inputs
 2. compute_lec         empirical LEC + bootstrap band, optional hybrid tail
+2b. resolve_layers     thresholds given as return periods -> dollars on this
+                       country's curve; insurance ceding share and premium (v8)
 3. simulate            synthetic catalogues (compound Poisson, CRN streams)
 4. evaluate_strategy   instrument payouts on the base catalogue
 5. run_risk_reduction  ex-ante DRR: reduced LEC, reduced catalogue, payouts   [risk_reduction.enabled]
@@ -84,6 +86,29 @@ def compute_lec(cfg, inputs):
         'max_event_loss': lec_result['max_loss'],
         'pml': reporting.pml_by_return_period(lec_curve, cfg.lec.pml_return_periods),
     }
+
+
+def resolve_layers(cfg, lec, inputs):
+    """
+    v8: place every threshold on the loss curve of the country being run and
+    price the insurance layers (see insurance_layer.py). Replaces the
+    instrument list in *inputs* with the resolved one, in dollars.
+    """
+    from insurance_layer import resolve_instruments, LayerError
+    try:
+        resolved, summaries, notes = resolve_instruments(
+            inputs['drm_configs'], lec['lec_curve'], cfg.insurance_pricing)
+    except LayerError as exc:
+        raise ConfigError(str(exc)) from exc
+    inputs['drm_configs'] = resolved
+    for s in summaries:
+        _log(f"insurance '{s.name}': layer {s.attachment:,.1f}-{s.exhaustion:,.1f} $MM "
+             f"(1 in {s.attachment_rp:.0f} to 1 in {s.exhaustion_rp:.0f} years), "
+             f"limit {s.coverage_limit:,.2f} $MM, premium {s.gross_premium:,.3f} $MM "
+             f"[{s.method}]")
+    for n in notes:
+        _log(f"warning: {n}")
+    return {'summaries': summaries, 'notes': notes}
 
 
 def simulate(cfg, lec):
@@ -191,7 +216,7 @@ def run_cba_stage(cfg, sim, strat, drr, thresholds, out_dir):
 # Outputs
 # =============================================================================
 
-def write_outputs(cfg, inputs, lec, sim, strat, drr, cba, thresholds, out_dir):
+def write_outputs(cfg, inputs, lec, sim, strat, drr, cba, thresholds, out_dir, layers=None):
     import plots  # imported here so run() can select the backend first
 
     run_id = cfg.run.id
@@ -267,6 +292,7 @@ def write_outputs(cfg, inputs, lec, sim, strat, drr, cba, thresholds, out_dir):
         'year_max': int(inputs['event_loss_df']['year'].max()),
         'lec': lec,
         'instruments': strat['drm_configs'],
+        'layers': layers,
         'scenarios': scenarios,
         'thresholds': thresholds,
         'gaps': gaps,
@@ -299,6 +325,7 @@ def run(config_path=None):
 
     inputs = load_inputs(cfg)
     lec = compute_lec(cfg, inputs)
+    layers = resolve_layers(cfg, lec, inputs)
     sim = simulate(cfg, lec)
     strat = evaluate_strategy(cfg, sim, inputs)
     drr = run_risk_reduction(cfg, lec, sim, inputs) if cfg.risk_reduction.enabled else None
@@ -314,7 +341,7 @@ def run(config_path=None):
         else:
             _log('cost-benefit analysis skipped: no instruments declared')
 
-    report, files = write_outputs(cfg, inputs, lec, sim, strat, drr, cba, thresholds, out_dir)
+    report, files = write_outputs(cfg, inputs, lec, sim, strat, drr, cba, thresholds, out_dir, layers)
     print('\n' + report)
     if cba is not None:
         print('\n' + cba['report'])

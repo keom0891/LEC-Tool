@@ -40,21 +40,35 @@ resp_fiscal = 0.60   # share of losses that is a fiscal responsibility of the go
 # -----------------------------------------------------------------------------
 # Financing strategy: one [[strategy.instruments]] block per instrument.
 # Supported types: "insurance", "ppo", "ccf", "ddo".
-# A "ppo" requires a "ccf" in the same strategy (the PPO triggers on CCF activation).
+# A "ppo" is triggered by the CCF activation (a "ccf" is then required) unless it
+# is given its own trigger: ppo_loss_trigger ($MM) or ppo_loss_trigger_rp (years).
+# Thresholds can be given in $MM or as an event return period in years (keys
+# ending in _rp); return periods are converted with the loss curve of the country
+# being run, so the same strategy is meaningful for every country.
 # Delete or comment out a block to exclude the instrument.
 # Optional CBA cost parameters can be added to any block; they override the
 # [cba.defaults.<type>] values for that instrument only:
-#   insurance: rate_on_line
-#   ppo:       commitment_fee_rate, loan_interest_rate, repayment_years, front_end_fee_rate, credit_line
+#   insurance: see the CCRIF block below and [insurance_pricing]
+#   ppo:       commitment_fee_rate, loan_interest_rate, repayment_years, front_end_fee_rate, credit_line,
+#              grace_period_years
 #   ccf:       drawdown_fee_rate, loan_interest_rate, repayment_years, grace_period_years
-#   ddo:       loan_interest_rate, repayment_years
+#   ddo:       loan_interest_rate, repayment_years, grace_period_years
 # -----------------------------------------------------------------------------
 [[strategy.instruments]]
-name              = "CCRIF"
-type              = "insurance"
-attachment_point  = 50      # $MM, loss at which coverage begins
-exhaustion_point  = 190     # $MM, loss at which coverage is exhausted
-ceding_percentage = 0.066   # share of the layer that is covered (0-1)
+name           = "CCRIF"
+type           = "insurance"
+attachment_rp  = 15      # years: event return period at which coverage begins
+exhaustion_rp  = 50      # years: event return period at which coverage is exhausted
+coverage_limit = 9.24    # $MM: maximum payout (the ceding share is derived from it)
+# Alternatives and options (uncomment to use):
+# attachment_point = 50 / exhaustion_point = 190    # $MM instead of return periods
+# ceding_percentage = 0.066                         # instead of coverage_limit
+# pricing = "quote"            # premium from a real quotation (see [insurance_pricing])
+# gross_premium = 0.50         # $MM per year, gross premium of the quotation
+# donor_discount = 0.25        # $MM per year paid by a donor (or donor_discount_share = 0.5)
+# payout_mode = "proportional" # or "binary" (teaching simplification)
+# one_payout_per_year = true   # the policy pays at most once per policy year
+# payout_floor = true          # a triggered policy pays at least the gross premium
 
 [[strategy.instruments]]
 name = "BID PPO"
@@ -68,7 +82,7 @@ ccf_person  = 1650      # $ per affected person
 Pop_exposed = 10.83e6   # exposed population
 
 [[strategy.instruments]]
-name          = "BID DDO $40MM"
+name          = "BID DDO"
 type          = "ddo"
 ddo_threshold = 120   # $MM, event loss that triggers the drawdown
 ddo_available = 80    # $MM, fixed payout per activation
@@ -95,7 +109,7 @@ omv_lambda              = 0.05      # risk-adjustment lambda of the Optimized Mo
 legacy_truncation       = false     # true: legacy year-by-year debt service truncated at the horizon (validation only)
 
 [cba.defaults.insurance]
-rate_on_line = 0.05   # annual premium = rate_on_line x layer width x ceding_percentage
+rate_on_line = 0.05   # used only when [insurance_pricing] method = "fixed_rol"
 
 [cba.defaults.ppo]
 commitment_fee_rate = 0.005    # annual fee on the undrawn balance
@@ -114,9 +128,43 @@ loan_interest_rate = 0.035
 repayment_years    = 5
 
 [cba.cnc]
-enabled               = true      # Comparative Net Cost: ex-ante instruments vs ex-post commercial debt
+# WARNING: set gdp and sovereign_base_spread for the country being run. The values
+# below are Honduras; with another country's curve they distort the CNC result.
+enabled               = true     # Comparative Net Cost: ex-ante instruments vs ex-post commercial debt
 gdp                   = 37094.0   # $MM, reference GDP of the country (default: Honduras 2024, World Bank)
 base_rate             = 0.035     # international base rate (SOFR)
 sovereign_base_spread = 0.05      # sovereign spread in ordinary conditions
 ex_post_term_years    = 10        # repayment term of the ex-post commercial debt
 spread_tiers          = [[0.02, 0.0], [0.05, 0.015], [inf, 0.05]]   # [upper event-loss/GDP threshold, additional spread]
+
+# -----------------------------------------------------------------------------
+# Insurance premium (v8). How the premium of each insurance layer is set when the
+# instrument block does not give a quotation (gross_premium).
+#   "rol_rule"     (default) the layer is cut into thin slices; slices hit more often
+#                  than 1 in cutoff_rp years are priced on the market curve below,
+#                  more remote slices at flat_rol. Default values are consistent with
+#                  the pricing structure of sovereign risk-pooling facilities; replace
+#                  them with the country's quotation whenever available. With the
+#                  default layer (1 in 15 to 1 in 50 years) every slice lies above the
+#                  cutoff, so the rule is equivalent to a flat ROL of flat_rol.
+#   "market_curve" every slice priced on the market curve (commercial reinsurance).
+#   "fixed_rol"    legacy: premium = rate_on_line x coverage limit.
+# A premium from a real quotation always takes precedence: set pricing = "quote"
+# and gross_premium in the instrument block.
+# -----------------------------------------------------------------------------
+[insurance_pricing]
+method     = "rol_rule"
+cutoff_rp  = 10      # years
+flat_rol   = 0.05    # rate on line for slices more remote than cutoff_rp
+# Market Rate-on-Line by event return period of a thin layer (Central America and
+# the Caribbean, broker indication). Reinsurance prices are volatile and seasonal:
+# update the table and its date at each renewal cycle.
+market_curve_rp   = [1, 5, 10, 25, 50, 100, 200, 500, 1000]
+market_curve_rol  = [0.40, 0.35, 0.25, 0.22, 0.09, 0.05, 0.045, 0.04, 0.035]
+market_curve_date = "2026-08"
+# Payout defaults for every insurance instrument (overridable per instrument).
+# one_payout_per_year is a conservative approximation of the annual aggregate limit
+# of sovereign parametric policies; set it to false to allow payouts per event.
+payout_mode         = "proportional"
+one_payout_per_year = true
+payout_floor        = true

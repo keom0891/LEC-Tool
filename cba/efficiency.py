@@ -7,7 +7,10 @@ and VfM-compatible communication.
 - Cost Multiple (CM): units of cost per unit of expected payout
 - Money Value (MV): coverage per unit of cost (CM inverse)
 - Optimized Money Value (OMV): risk-adjusted coverage per unit of cost
-  Following World Bank methodology for CCRIF SPC evaluation.
+  Value-for-money framing adapted from World Bank Institute and PPIAF (2013),
+  Value-for-Money Analysis: Practices and Challenges. How Governments Choose
+  When to Use PPP to Deliver Public Infrastructure and Services.
+  http://hdl.handle.net/10986/17622 (CC BY 3.0 IGO).
 """
 
 import numpy as np
@@ -50,8 +53,7 @@ def compute_efficiency_indicators(
 
         Where NF_k is the normalization factor (annualized cost).
         The λ term rewards instruments with higher payout variability
-        (more responsive to tail events). Following World Bank practice,
-        λ = 0.05 by default.
+        (more responsive to tail events). λ = 0.05 by default.
 
         For OMV we use total PV costs as NF (mean annual cost × horizon).
     """

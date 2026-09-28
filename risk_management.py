@@ -33,13 +33,112 @@ from utils import aggregate_event_values_by_year
 # ---------------------------------------------------------------------------
 
 def standard_insurance_payout(values, attachment_point=15, exhaustion_point=50,
-                               ceding_percentage=0.5):
+                               ceding_percentage=0.5,
+                               payout_mode='proportional',
+                               one_payout_per_year=False,
+                               event_years=None,
+                               minimum_payout=0.0):
     """
-    Apply parametric or indemnity insurance coverage to a sequence of event losses.
+    Apply parametric insurance coverage to a sequence of event losses.
 
-    Coverage resets for every individual event (no aggregate limit across events).
-    The insurer pays ``ceding_percentage`` of the loss within the layer
-    [attachment_point, exhaustion_point].
+    Two independent policy features are configurable: how much the policy
+    pays when it triggers (*payout_mode*) and how often it may trigger
+    within a policy year (*one_payout_per_year*). The defaults reproduce the
+    behaviour of earlier versions exactly.
+
+    Payout modes
+    ------------
+    ``'proportional'`` (default)
+        The insurer pays ``ceding_percentage`` of the loss lying inside the
+        layer [attachment_point, exhaustion_point]:
+
+            payout = min(max(L - AP, 0), EP - AP) * ceding_percentage
+
+        A loss just above the attachment point produces a small payout; a
+        loss at or beyond the exhaustion point produces the full coverage
+        limit. This is how commercial CCRIF policies actually work, and it
+        is why the exhaustion point and the ceding percentage both appear in
+        a real quotation: together they define the coverage limit, and the
+        distance between attachment and exhaustion defines the ramp.
+
+    ``'binary'``
+        Any loss above the attachment point pays the full coverage limit:
+
+            payout = (EP - AP) * ceding_percentage   if L > AP, else 0
+
+        Nothing is prorated. This is a teaching simplification, adopted for
+        the worked example so that the mechanism can be explained and drawn
+        without a ramp: cross the threshold, collect the cover. It should
+        not be presented as the contractual behaviour of a real policy.
+
+    Coverage reset
+    --------------
+    ``one_payout_per_year=False`` (default)
+        Coverage resets for every individual event. A year with three
+        qualifying events produces three payouts, each up to the full limit,
+        with no additional premium. This is the behaviour of earlier
+        versions of this codebase.
+
+    ``one_payout_per_year=True``
+        The policy pays at most once per policy year. Once it has paid, it
+        is spent for the remainder of that year even if the payout was well
+        below the coverage limit; cover is restored only at renewal, when
+        the next annual premium is paid. This is a conservative
+        approximation of the annual aggregate limit of sovereign parametric
+        policies, under which a second event in the same year still pays
+        while part of the limit remains. Requires *event_years*.
+
+    Why both features matter, and why they must be decided together
+    ---------------------------------------------------------------
+    The two features push the expected payout in OPPOSITE directions, so
+    adopting one without the other gives a misleading picture. Measured on
+    the worked example's historical catalogue (Honduras hurricane, 1974-2024,
+    layer $50M-$190M, ceding 6.6%, coverage limit $9.24M):
+
+        Rule                                  Expected payout   vs default
+        ----------------------------------    ---------------   ----------
+        per event  + proportional (default)      $2.138M/yr         ---
+        per event  + binary                      $4.711M/yr        +120%
+        one/year   + proportional                $1.038M/yr         -51%
+        one/year   + binary                      $2.718M/yr         +27%
+
+    Of the 26 events that generate a payout over the 51-year record, 11 are
+    the second or later qualifying event within the same calendar year. That
+    concentration is what makes the reset rule worth half the expected
+    payout.
+
+    Consequence for pricing coherence
+    ---------------------------------
+    Under binary payout with one payout per year, the actuarially pure
+    Rate-on-Line collapses to the annual probability that the policy
+    triggers, which is the reciprocal of the attachment point's return
+    period:
+
+        pure ROL = P(trigger in a year) = 1 / RP(attachment)
+
+    On the worked example that is 15 triggering years out of 51, or 29.4 per
+    cent, against a return period of 3.4 years. This resolves an
+    inconsistency that appeared while calibrating the premium: a broker
+    indication curve quoted as ROL against attachment return period implied
+    implausible cost multiples of 4 to 8 when applied to a wide proportional
+    layer, because such curves are quoted for THIN layers, where touching
+    the attachment point is nearly equivalent to exhausting the limit.
+    Binary payout is exactly that limiting case, and under it the same
+    curve implies a cost multiple of about 1.26, which is commercially
+    plausible.
+
+    It also yields a closed form for the benefit-cost ratio of insurance
+    that mirrors the one for credit instruments:
+
+        B/C = (1 + f_B) / cost multiple
+
+    where the cost multiple is premium over expected payout. At an
+    actuarially fair premium the ratio equals (1 + f_B) exactly. The
+    benefit-cost ratio of an insurance instrument therefore measures the
+    loading paid over expected loss, just as the ratio for a concessional
+    loan measures the subsidy received. Neither ratio measures protection,
+    which is why neither should be the headline indicator for judging
+    whether cover is worth buying.
 
     Parameters
     ----------
@@ -50,38 +149,128 @@ def standard_insurance_payout(values, attachment_point=15, exhaustion_point=50,
     exhaustion_point : float, default 50
         Loss level ($MM) at which coverage is fully exhausted.
     ceding_percentage : float, default 0.5
-        Share of losses covered within the layer (0 – 1).
+        Share of losses covered within the layer (0 - 1).
+    payout_mode : {'proportional', 'binary'}, default 'proportional'
+        See above.
+    one_payout_per_year : bool, default False
+        See above. Requires *event_years*.
+    event_years : array_like of int, optional
+        Policy year index of each event, same length as *values*. Only
+        consulted when *one_payout_per_year* is True. The worked example
+        uses calendar years for clarity; in practice CCRIF policies renew
+        on 1 June, ahead of the Atlantic hurricane season, so a policy year
+        straddles two calendar years. For a hurricane-only catalogue the
+        two conventions rarely differ, because the season falls inside a
+        single calendar year, but the choice should be stated explicitly
+        whenever the peril is not seasonal.
+    minimum_payout : float, default 0.0
+        Payout floor ($MM) for any event that triggers the policy. Sovereign
+        parametric pools pay at least the annual gross premium whenever the
+        policy is triggered, even when the proportional ramp would give
+        less. The floor never exceeds the coverage limit and has no effect
+        under the binary rule, which already pays the full limit.
 
     Returns
     -------
     list of float
-        Insurance payout for each event ($MM).  Same length as *values*.
+        Insurance payout for each event ($MM). Same length as *values*.
 
     Examples
     --------
     >>> standard_insurance_payout([10, 30, 100], attachment_point=20,
     ...                            exhaustion_point=80, ceding_percentage=1.0)
     [0, 10, 60]
+
+    >>> standard_insurance_payout([10, 30, 100], attachment_point=20,
+    ...                            exhaustion_point=80, ceding_percentage=1.0,
+    ...                            payout_mode='binary')
+    [0, 60, 60]
+
+    >>> standard_insurance_payout([30, 100], attachment_point=20,
+    ...                            exhaustion_point=80, ceding_percentage=1.0,
+    ...                            payout_mode='binary', one_payout_per_year=True,
+    ...                            event_years=[0, 0])
+    [60, 0]
     """
+    if payout_mode not in ('proportional', 'binary'):
+        raise ValueError(
+            f"standard_insurance_payout: payout_mode must be 'proportional' "
+            f"or 'binary', got {payout_mode!r}."
+        )
+    if one_payout_per_year and event_years is None:
+        raise ValueError(
+            "standard_insurance_payout: one_payout_per_year=True requires "
+            "event_years, the policy year index of each event. Without it "
+            "the function cannot tell which events share a policy year."
+        )
+    if one_payout_per_year and len(event_years) != len(values):
+        raise ValueError(
+            f"standard_insurance_payout: event_years has length "
+            f"{len(event_years)} but values has length {len(values)}. They "
+            f"must correspond element by element."
+        )
+
+    limit = (exhaustion_point - attachment_point) * ceding_percentage
     payouts = []
-    for loss in values:
+    years_already_paid = set()
+
+    for i, loss in enumerate(values):
         if loss <= attachment_point:
-            payout = 0.0
+            payouts.append(0.0)
+            continue
+
+        # The policy is spent for this year if it has already paid, however
+        # small that earlier payout was. Cover returns only at renewal.
+        if one_payout_per_year:
+            year = event_years[i]
+            if year in years_already_paid:
+                payouts.append(0.0)
+                continue
+
+        if payout_mode == 'binary':
+            payout = limit
         elif loss >= exhaustion_point:
-            payout = (exhaustion_point - attachment_point) * ceding_percentage
+            payout = limit
         else:
             payout = (loss - attachment_point) * ceding_percentage
+            if minimum_payout > 0:
+                payout = min(max(payout, minimum_payout), limit)
+
         payouts.append(payout)
+        if one_payout_per_year and payout > 0:
+            years_already_paid.add(event_years[i])
+
     return payouts
 
 
-def apply_ppo_coverage(values, ppo_available, ccf_applied):
+def apply_ppo_coverage(values, ppo_available, ccf_applied,
+                       ppo_loss_trigger=None,
+                       trigger_mode='ccf',
+                       require_available_funds=False):
     """
     Apply a Pre-arranged Parametric Option (PPO) to a sequence of event losses.
 
-    The PPO activates at most once per catalogue — at the first event that
-    exceeds ``ppo_loss_trigger``.  Subsequent events receive no payout even
-    if they also exceed the trigger.
+    The PPO activates at most once per catalogue.  Two activation rules are
+    supported, selected with *trigger_mode*.
+
+    ``trigger_mode='loss'``
+        The PPO activates at the first event whose loss exceeds
+        ``ppo_loss_trigger``.  This is the instrument's own threshold and
+        makes the PPO independent of the other instruments in the strategy.
+
+    ``trigger_mode='ccf'``
+        The PPO activates at the first event that also activates the CCF.
+        This reproduces the behaviour of the merged BID codebase and is the
+        default so existing configurations are unaffected.  Because the CCF
+        activates on small, frequent events, this rule tends to consume the
+        PPO's single activation early in the horizon, while the available
+        amount is still ramping up.
+
+    In both modes, *require_available_funds* prevents the single activation
+    from being consumed by an event at which no funds are available.  Under
+    the original merged code the PPO could trigger against an available
+    amount of zero, disburse nothing, and stay permanently disabled for the
+    rest of the horizon.
 
     Parameters
     ----------
@@ -107,11 +296,38 @@ def apply_ppo_coverage(values, ppo_available, ccf_applied):
     each event to its year and looking up the correct available amount
     (see ``apply_strategy``).
     """
+    if trigger_mode not in ('ccf', 'loss'):
+        raise ValueError(
+            f"apply_ppo_coverage: trigger_mode must be 'ccf' or 'loss', got "
+            f"{trigger_mode!r}."
+        )
+    if trigger_mode == 'loss' and ppo_loss_trigger is None:
+        raise ValueError(
+            "apply_ppo_coverage: trigger_mode='loss' requires ppo_loss_trigger "
+            "to be set. Provide the loss threshold ($MM) above which the PPO "
+            "activates."
+        )
+
     ppo_applied = []
     ppo_triggered = False
 
     for i, loss in enumerate(values):
-        if ccf_applied[i] > 0 and not ppo_triggered:
+        if ppo_triggered:
+            ppo_applied.append(0.0)
+            continue
+
+        if trigger_mode == 'loss':
+            condition_met = loss > ppo_loss_trigger
+        else:
+            condition_met = ccf_applied[i] > 0
+
+        # An activation that disburses nothing still consumes the single
+        # trigger.  Unless disabled, skip such events and keep the PPO
+        # available for a later event that does have funds.
+        if condition_met and require_available_funds and ppo_available[i] <= 0:
+            condition_met = False
+
+        if condition_met:
             ppo_applied.append(ppo_available[i])
             ppo_triggered = True
         else:
@@ -244,11 +460,31 @@ def apply_strategy(event_catalogue, drm_configs, catalogue_length):
           attachment_point    float  ($MM)
           exhaustion_point    float  ($MM)
           ceding_percentage   float  (0–1)
+          payout_mode         str, optional, default 'proportional'
+              'proportional' pays the ceded share of the loss inside the
+                  layer, which is how a real policy behaves.
+              'binary' pays the full coverage limit on any loss above the
+                  attachment point. Teaching simplification.
+          one_payout_per_year bool, optional, default False
+              When True the policy pays at most once per policy year and
+              cover is restored only at renewal.
+          See standard_insurance_payout for why these two options must be
+          decided together: they move the expected payout in opposite
+          directions.
 
         type 'ppo':
           ppo_schedule        list of float, length catalogue_length
               Available PPO payout for each year index ($MM).
-          ppo_loss_trigger    float  ($MM)
+          ppo_loss_trigger    float  ($MM), optional
+              Own loss threshold of the PPO.  Required when
+              ppo_trigger_mode is 'loss'; ignored otherwise.
+          ppo_trigger_mode    str, optional, default 'ccf'
+              'ccf'  activates with the CCF (merged-codebase behaviour).
+              'loss' activates at the first event exceeding
+                     ppo_loss_trigger, independently of other instruments.
+          ppo_require_available_funds  bool, optional, default False
+              When True, an event with zero available PPO funds does not
+              consume the single activation.
 
         type 'ccf':
           ccf_maximum         float  ($MM)
@@ -315,11 +551,21 @@ def apply_strategy(event_catalogue, drm_configs, catalogue_length):
             instrument_type = cfg['type']
 
             if instrument_type == 'insurance':
+                # Policy-year index of each event. Events are timed in
+                # fractional years from the start of the horizon, so the
+                # integer part is the year the event falls in. Only used
+                # when the policy pays at most once per year.
+                ins_years = (np.floor(times_i).astype(int).tolist()
+                             if len(times_i) else [])
                 p = np.array(standard_insurance_payout(
                     loss_list,
                     attachment_point=cfg['attachment_point'],
                     exhaustion_point=cfg['exhaustion_point'],
                     ceding_percentage=cfg['ceding_percentage'],
+                    payout_mode=cfg.get('payout_mode', 'proportional'),
+                    one_payout_per_year=cfg.get('one_payout_per_year', False),
+                    event_years=ins_years,
+                    minimum_payout=cfg.get('minimum_payout', 0.0),
                 ))
 
             elif instrument_type == 'ppo':
@@ -344,6 +590,10 @@ def apply_strategy(event_catalogue, drm_configs, catalogue_length):
                         loss_list,
                         ppo_available=ppo_available_event,
                         ccf_applied=ccf_trigger,
+                        ppo_loss_trigger=cfg.get('ppo_loss_trigger'),
+                        trigger_mode=cfg.get('ppo_trigger_mode', 'ccf'),
+                        require_available_funds=cfg.get(
+                            'ppo_require_available_funds', False),
                     ))
 
             elif instrument_type == 'ccf':

@@ -31,21 +31,37 @@ import pandas as pd
 INSTRUMENT_TYPES = ('insurance', 'ppo', 'ccf', 'ddo')
 
 # Payout parameters that risk_management.apply_strategy needs per type.
+# Keys given as alternatives (dollars or return period, see ALTERNATIVE_KEYS)
+# are checked separately.
 REQUIRED_INSTRUMENT_KEYS = {
-    'insurance': ('attachment_point', 'exhaustion_point', 'ceding_percentage'),
+    'insurance': (),
     'ppo':       (),
     'ccf':       ('ccf_maximum', 'ccf_person', 'Pop_exposed'),
-    'ddo':       ('ddo_threshold', 'ddo_available'),
+    'ddo':       ('ddo_available',),
 }
+
+# v8: thresholds can be given in dollars or as an event return period
+# (converted with the loss curve of the country being run, see
+# insurance_layer.py). Exactly one key of each pair is required.
+ALTERNATIVE_KEYS = {
+    'insurance': (('attachment_point', 'attachment_rp'),
+                  ('exhaustion_point', 'exhaustion_rp'),
+                  ('ceding_percentage', 'coverage_limit')),
+    'ddo':       (('ddo_threshold', 'ddo_threshold_rp'),),
+    'ppo':       (),
+    'ccf':       (),
+}
+PPO_TRIGGER_MODES = ('ccf', 'loss')
+PAYOUT_MODES = ('proportional', 'binary')
 
 # Optional CBA cost overrides accepted per type (see cba.engine._build_instrument_config).
 CBA_COST_KEYS = {
     'insurance': ('rate_on_line', 'premium'),
     'ppo':       ('commitment_fee_rate', 'loan_interest_rate', 'repayment_years',
-                  'front_end_fee_rate', 'credit_line'),
+                  'front_end_fee_rate', 'credit_line', 'grace_period_years'),
     'ccf':       ('drawdown_fee_rate', 'loan_interest_rate', 'repayment_years',
                   'grace_period_years'),
-    'ddo':       ('loan_interest_rate', 'repayment_years'),
+    'ddo':       ('loan_interest_rate', 'repayment_years', 'grace_period_years'),
 }
 
 _INVALID_ID_CHARS = set('<>:"/\\|?*')
@@ -131,6 +147,7 @@ class RunConfig:
     cba: CBASection
     source_path: Path            # the config.toml that was read
     raw: dict                    # parsed TOML, for traceability
+    insurance_pricing: Any = None  # insurance_layer.PricingSettings
 
     # Convenience predicates -------------------------------------------------
     @property
@@ -311,11 +328,18 @@ def load_config(path: Optional[str | Path] = None) -> RunConfig:
             raise ConfigError(
                 f"[{label}] ('{name}') must not define 'ppo_schedule'; it is read from inputs.ppo_schedule_file."
             )
+        _validate_instrument_v8(inst, itype, label, name)
     types_present = {i['type'] for i in instruments}
-    if 'ppo' in types_present and 'ccf' not in types_present:
+    ccf_triggered_ppo = any(
+        i['type'] == 'ppo' and i.get('ppo_trigger_mode', 'loss' if (
+            'ppo_loss_trigger' in i or 'ppo_loss_trigger_rp' in i) else 'ccf') == 'ccf'
+        for i in instruments
+    )
+    if ccf_triggered_ppo and 'ccf' not in types_present:
         raise ConfigError(
-            "A 'ppo' instrument requires a 'ccf' instrument in the same strategy "
-            "(the PPO is triggered by the CCF activation)."
+            "A 'ppo' instrument triggered by the CCF requires a 'ccf' instrument in the "
+            "same strategy. To trigger the PPO on its own loss threshold, give it "
+            "'ppo_loss_trigger' ($MM) or 'ppo_loss_trigger_rp' (years)."
         )
 
     # --- [inputs] -----------------------------------------------------------
@@ -397,11 +421,97 @@ def load_config(path: Optional[str | Path] = None) -> RunConfig:
     else:
         cba = CBASection(enabled=False)
 
+    insurance_pricing = _load_insurance_pricing(raw, cba)
+
     return RunConfig(
         run=run, inputs=inputs, lec=lec, simulation=simulation, fiscal=fiscal,
         instruments=[dict(i) for i in instruments], risk_reduction=risk_reduction,
         cba=cba, source_path=path.resolve(), raw=raw,
+        insurance_pricing=insurance_pricing,
     )
+
+
+# ---------------------------------------------------------------------------
+# v8: instrument keys and [insurance_pricing]
+# ---------------------------------------------------------------------------
+
+def _validate_instrument_v8(inst, itype, label, name):
+    """Checks for the v8 keys (return periods, coverage limit, pricing)."""
+    from insurance_layer import PRICING_METHODS
+    where = f"[{label}] ('{name}')"
+    for dollars, alt in ALTERNATIVE_KEYS[itype]:
+        has_d, has_a = dollars in inst, alt in inst
+        if has_d and has_a:
+            raise ConfigError(f"{where} gives both '{dollars}' and '{alt}'; keep only one.")
+        if not (has_d or has_a):
+            raise ConfigError(f"{where} needs '{dollars}' or '{alt}'.")
+    for key in ('attachment_rp', 'exhaustion_rp', 'ddo_threshold_rp', 'ppo_loss_trigger_rp'):
+        if key in inst:
+            _number(inst, key, f"{label}", lo=1.0)
+    for key in ('coverage_limit', 'gross_premium', 'premium'):
+        if key in inst:
+            _number(inst, key, f"{label}", lo=1e-12)
+    if 'donor_discount' in inst:
+        _number(inst, 'donor_discount', f"{label}", lo=0.0)
+    if 'donor_discount_share' in inst:
+        _number(inst, 'donor_discount_share', f"{label}", lo=0.0, hi=1.0)
+    if 'ceding_percentage' in inst:
+        _number(inst, 'ceding_percentage', f"{label}", lo=0.0, hi=1.0)
+    if 'attachment_rp' in inst and 'exhaustion_rp' in inst and inst['exhaustion_rp'] <= inst['attachment_rp']:
+        raise ConfigError(f"{where}: exhaustion_rp must be larger than attachment_rp.")
+    if 'pricing' in inst and inst['pricing'] not in PRICING_METHODS:
+        raise ConfigError(f"{where}: pricing must be one of {', '.join(PRICING_METHODS)}.")
+    if inst.get('pricing') == 'quote' and not ('gross_premium' in inst or 'premium' in inst):
+        raise ConfigError(f"{where}: pricing = 'quote' needs 'gross_premium' ($MM, from the quotation).")
+    if 'payout_mode' in inst and inst['payout_mode'] not in PAYOUT_MODES:
+        raise ConfigError(f"{where}: payout_mode must be 'proportional' or 'binary'.")
+    for key in ('one_payout_per_year', 'payout_floor', 'ppo_require_available_funds'):
+        if key in inst and not isinstance(inst[key], bool):
+            raise ConfigError(f"{where}: '{key}' must be true or false.")
+    if itype == 'ppo':
+        mode = inst.get('ppo_trigger_mode')
+        if mode is not None and mode not in PPO_TRIGGER_MODES:
+            raise ConfigError(f"{where}: ppo_trigger_mode must be 'ccf' or 'loss'.")
+        has_trigger = 'ppo_loss_trigger' in inst or 'ppo_loss_trigger_rp' in inst
+        if 'ppo_loss_trigger' in inst and 'ppo_loss_trigger_rp' in inst:
+            raise ConfigError(f"{where} gives both 'ppo_loss_trigger' and 'ppo_loss_trigger_rp'; keep only one.")
+        if mode == 'loss' and not has_trigger:
+            raise ConfigError(f"{where}: ppo_trigger_mode = 'loss' needs 'ppo_loss_trigger' or 'ppo_loss_trigger_rp'.")
+
+
+def _load_insurance_pricing(raw, cba):
+    """[insurance_pricing] -> insurance_layer.PricingSettings (all keys optional)."""
+    from insurance_layer import PricingSettings, PRICING_METHODS
+    sec = _section(raw, 'insurance_pricing', required=False)
+    s = PricingSettings()
+    legacy_rol = cba.defaults.get('insurance', {}).get('rate_on_line') if cba.enabled else None
+    method = _get(sec, 'method', 'insurance_pricing', s.method, str)
+    if method not in PRICING_METHODS or method == 'quote':
+        raise ConfigError(
+            "[insurance_pricing] 'method' must be 'rol_rule', 'market_curve' or 'fixed_rol' "
+            "('quote' is set per instrument with gross_premium)."
+        )
+    s.method = method
+    s.cutoff_rp = _number(sec, 'cutoff_rp', 'insurance_pricing', s.cutoff_rp, lo=1.0)
+    s.flat_rol = _number(sec, 'flat_rol', 'insurance_pricing', s.flat_rol, lo=1e-6, hi=1.0)
+    s.rate_on_line = _number(sec, 'rate_on_line', 'insurance_pricing',
+                             legacy_rol if legacy_rol is not None else s.rate_on_line, lo=1e-6, hi=1.0)
+    rp = _number_list(sec, 'market_curve_rp', 'insurance_pricing', list(s.curve_rp), lo=1e-9)
+    rol = _number_list(sec, 'market_curve_rol', 'insurance_pricing', list(s.curve_rol), lo=1e-9)
+    if len(rp) != len(rol) or len(rp) < 2:
+        raise ConfigError("[insurance_pricing] 'market_curve_rp' and 'market_curve_rol' need the same length (>= 2).")
+    if any(b <= a for a, b in zip(rp, rp[1:])):
+        raise ConfigError("[insurance_pricing] 'market_curve_rp' must be strictly increasing.")
+    if any(v > 1.0 for v in rol):
+        raise ConfigError("[insurance_pricing] 'market_curve_rol' values are rates (0.25 = 25 %).")
+    s.curve_rp, s.curve_rol = rp, rol
+    s.curve_date = str(_get(sec, 'market_curve_date', 'insurance_pricing', s.curve_date, str))
+    s.payout_mode = _get(sec, 'payout_mode', 'insurance_pricing', s.payout_mode, str)
+    if s.payout_mode not in PAYOUT_MODES:
+        raise ConfigError("[insurance_pricing] 'payout_mode' must be 'proportional' or 'binary'.")
+    s.one_payout_per_year = _get(sec, 'one_payout_per_year', 'insurance_pricing', s.one_payout_per_year, bool)
+    s.payout_floor = _get(sec, 'payout_floor', 'insurance_pricing', s.payout_floor, bool)
+    return s
 
 
 # ---------------------------------------------------------------------------
