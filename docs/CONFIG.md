@@ -140,9 +140,11 @@ contador de reposiciones. Antes de la primera renovación se usa `initial_balanc
 
 Con `max_replenishments_per_period = 1`, al agotarse el saldo se permite una
 reposición al monto contratado por período, incluido el período inicial.
-Si un desastre agota el saldo, la reposición permitida puede completar el pago
-de ese mismo evento, sin aumentar su desembolso solicitado. También puede
-utilizarse con saldo inicial cero, siempre que quede una reposición permitida.
+Cada desastre solo puede utilizar el saldo disponible al inicio del evento.
+Si lo agota, la reposición se realiza después del pago y puede utilizarse
+desde el siguiente evento, incluso en el mismo año. Con saldo inicial cero,
+el primer evento no recibe desembolso y la reposición queda disponible para
+el siguiente, siempre que quede una reposición permitida.
 Un segundo agotamiento debe esperar a la renovación automática. La reposición
 no mueve las fechas de renovación. Se admite 0 para desactivar la reposición.
 
@@ -150,7 +152,7 @@ CCF activa con pérdida estrictamente mayor que
 `max(ccf_threshold, 0.01 * Pop_exposed * ccf_person / 1e6)` y mantiene la fórmula
 por personas afectadas. `contracted_amount` reemplaza el antiguo `ccf_maximum`.
 DDO activa con pérdida estrictamente mayor que `ddo_threshold` y solicita
-`min(pérdida, saldo + reposición permitida)`, sin límite adicional por desastre.
+`min(pérdida, saldo disponible al inicio del evento)`, sin límite adicional por desastre.
 
 `loan` requiere `loan_threshold`, `initial_balance`, `start_year` y `end_year`.
 No se repone ni renueva. Los años de vigencia son inclusivos. En cada evento

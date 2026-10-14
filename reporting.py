@@ -47,6 +47,8 @@ def strategy_statistics(label, annual_df, coverage_df, resp_fiscal, horizon):
         f'Total {horizon}-year coverage median ($MM)': cov_med,
         f'Total {horizon}-year retention median ($MM)': ret_med,
         f'Total {horizon}-year uncovered median ($MM)': uncov_med,
+        f'Total {horizon}-year FISCAL loss median ($MM)': np.round(
+            resp_fiscal * annual_df.sum(axis=1).median(), 1),
         f'Total {horizon}-year FISCAL retention median ($MM)': np.round(resp_fiscal * ret_med, 1),
         f'Total {horizon}-year FISCAL uncovered median ($MM)': np.round(resp_fiscal * uncov_med, 1),
     }

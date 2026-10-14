@@ -228,26 +228,24 @@ class _CreditBalance:
                 and self.cfg['contracted_amount'] > 0)
 
     def capacity(self):
-        return self.balance + (self.cfg['contracted_amount'] if self.can_replenish() else 0)
+        return self.balance
 
     def spend(self, amount):
-        if amount <= 0:
-            return
         first_draw = min(amount, self.balance)
         self.balance = max(0.0, self.balance - first_draw)
-        amount -= first_draw
         if self.balance <= 0 and self.can_replenish():
             self.balance = float(self.cfg['contracted_amount'])
             self.used += 1
-        self.balance = max(0.0, self.balance - amount)
 
 
 def apply_strategy(event_catalogue, drm_configs, catalogue_length, first_year=None):
     """Evaluate events chronologically, renewing lines at calendar-year boundaries.
 
     CCF/DDO start with initial_balance, renew to contracted_amount, and allow
-    one exhaustion replenishment per period. A replenishment can fund the same
-    event without increasing its requested payout. Loan has inclusive calendar
+    one exhaustion replenishment per period. Each event can draw only its
+    starting balance; replenishment is available from the next event, even
+    within the same year. A zero starting balance is replenished after the
+    first event, subject to the same limit. Loan has inclusive calendar
     validity and no replenishment. Balances consume only final, proportionally
     capped payouts. Each simulation owns fresh independent instrument balances.
 

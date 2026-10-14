@@ -20,7 +20,7 @@ tail_curve_file   = "Country databases/12 - El Salvador/SLV_event_prob_subset.cs
 ppo_schedule_file = "data/ppo_example.csv"                                           # one headerless row, one value per year; used only if a "ppo" instrument is declared
 
 [lec]
-loss_scale_factor       = 1.0   # multiplies every loss (historic catalogue and probabilistic tail)
+loss_scale_factor       = 1.15   # multiplies every loss (historic catalogue and probabilistic tail)
 freq_scale_factor       = 1.0    # multiplies every exceedance rate
 hybrid_curve            = true   # blend the empirical LEC with the probabilistic tail
 bootstrap_samples       = 1000   # bootstrap resamples for the LEC confidence band
